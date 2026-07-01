@@ -63,10 +63,10 @@ async function handleTable(
 	itemIndex: number,
 ): Promise<Array<Record<string, unknown>>> {
 	const operation = exec.getNodeParameter('operation', itemIndex) as string;
+	const schema = exec.getNodeParameter('schema', itemIndex) as string;
+	const tableName = exec.getNodeParameter('table', itemIndex) as string;
 
 	if (operation === 'read') {
-		const schema = exec.getNodeParameter('schema', itemIndex) as string;
-		const tableName = exec.getNodeParameter('table', itemIndex) as string;
 		const columns = exec.getNodeParameter('columns', itemIndex, []) as string[];
 		const filter = exec.getNodeParameter('filter', itemIndex, '') as string;
 		const limit = exec.getNodeParameter('limit', itemIndex, 100) as number;
@@ -83,9 +83,70 @@ async function handleTable(
 		return client.query(sql);
 	}
 
+	if (operation === 'insert') {
+		const items = exec.getInputData();
+		const inputJson = items[itemIndex]?.json;
+		if (!inputJson || Object.keys(inputJson).length === 0) {
+			throw new NodeOperationError(exec.getNode(), 'No data in the input item to insert.', { itemIndex });
+		}
+
+		const selectedColumns = exec.getNodeParameter('columns', itemIndex, []) as string[];
+		// If columns not specified, use all keys from the input JSON
+		const cols = selectedColumns.length > 0 ? selectedColumns : Object.keys(inputJson);
+
+		// Build VALUES with proper quoting (strings get quoted, numbers/booleans pass through)
+		const vals = cols.map((col) => {
+			const val = inputJson[col];
+			if (val === undefined || val === null) return 'NULL';
+			if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+			return `'${String(val).replace(/'/g, "''")}'`;
+		});
+
+		const sql = `INSERT INTO ${schema}.${tableName} (${cols.join(', ')}) VALUES (${vals.join(', ')})`;
+		await client.update(sql);
+		return [{ query: sql, rows_affected: 1 }];
+	}
+
+	if (operation === 'update') {
+		const items = exec.getInputData();
+		const inputJson = items[itemIndex]?.json;
+		if (!inputJson || Object.keys(inputJson).length === 0) {
+			throw new NodeOperationError(exec.getNode(), 'No data in the input item to update.', { itemIndex });
+		}
+
+		const selectedColumns = exec.getNodeParameter('columns', itemIndex, []) as string[];
+		const filter = exec.getNodeParameter('filter', itemIndex, '') as string;
+		if (!filter || !filter.trim()) {
+			throw new NodeOperationError(exec.getNode(), 'A WHERE clause is required for UPDATE.', { itemIndex });
+		}
+
+		const cols = selectedColumns.length > 0 ? selectedColumns : Object.keys(inputJson);
+		const sets = cols.map((col) => {
+			const val = inputJson[col];
+			if (val === undefined || val === null) return `${col} = NULL`;
+			if (typeof val === 'number' || typeof val === 'boolean') return `${col} = ${val}`;
+			return `${col} = '${String(val).replace(/'/g, "''")}'`;
+		});
+
+		const sql = `UPDATE ${schema}.${tableName} SET ${sets.join(', ')} WHERE ${filter.trim()}`;
+		await client.update(sql);
+		return [{ query: sql, rows_affected: 1 }];
+	}
+
+	if (operation === 'delete') {
+		const filter = exec.getNodeParameter('filter', itemIndex, '') as string;
+		if (!filter || !filter.trim()) {
+			throw new NodeOperationError(exec.getNode(), 'A WHERE clause is required for DELETE.', { itemIndex });
+		}
+
+		const sql = `DELETE FROM ${schema}.${tableName} WHERE ${filter.trim()}`;
+		await client.update(sql);
+		return [{ query: sql, rows_affected: 1 }];
+	}
+
 	throw new NodeOperationError(
 		exec.getNode(),
-		`Operation "${operation}" is not yet implemented for the Table resource. Use the Query resource with a custom SQL statement for now.`,
+		`Unknown operation: "${operation}"`,
 		{ itemIndex },
 	);
 }
@@ -173,9 +234,9 @@ export class QuackOnDemand implements INodeType {
 				displayOptions: { show: { resource: ['table'] } },
 				options: [
 					{ name: 'Read', value: 'read', description: 'SELECT rows (auto-generated SQL)', action: 'Read rows from a table' },
-					{ name: 'Insert', value: 'insert', description: 'INSERT rows (WIP)', action: 'Insert rows into a table' },
-					{ name: 'Update', value: 'update', description: 'UPDATE rows (WIP)', action: 'Update rows in a table' },
-					{ name: 'Delete', value: 'delete', description: 'DELETE rows (WIP)', action: 'Delete rows from a table' },
+					{ name: 'Insert', value: 'insert', description: 'INSERT rows (values from input JSON)', action: 'Insert rows into a table' },
+					{ name: 'Update', value: 'update', description: 'UPDATE rows (values from input JSON)', action: 'Update rows in a table' },
+					{ name: 'Delete', value: 'delete', description: 'DELETE rows by WHERE clause', action: 'Delete rows from a table' },
 				],
 				default: 'read',
 			},
@@ -293,6 +354,29 @@ export class QuackOnDemand implements INodeType {
 				typeOptions: { minValue: 0, maxValue: 100000 },
 				default: 100,
 				description: 'Max rows to return. 0 = no limit.',
+			},
+
+			// ── TABLE-specific fields (Insert / Update) ───────────────
+			{
+				displayName: 'Columns',
+				name: 'columns',
+				type: 'multiOptions',
+				displayOptions: { show: { resource: ['table'], operation: ['insert', 'update'] } },
+				typeOptions: { loadOptionsMethod: 'getColumns', loadOptionsDependsOn: ['tenant', 'schema', 'table'] },
+				default: [],
+				description: 'Columns to insert/update. Empty = use all keys from the input JSON.',
+			},
+
+			// ── TABLE-specific fields (Update / Delete) ───────────────
+			{
+				displayName: 'Filter (WHERE)',
+				name: 'filter',
+				type: 'string',
+				displayOptions: { show: { resource: ['table'], operation: ['update', 'delete'] } },
+				default: '',
+				required: true,
+				placeholder: "c_custkey = 42",
+				description: 'WHERE clause (required for UPDATE/DELETE).',
 			},
 
 			// ── QUERY-specific fields ─────────────────────────────────
