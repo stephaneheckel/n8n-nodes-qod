@@ -1,10 +1,7 @@
 import {
-	ICredentialDataDecryptedObject,
-	ICredentialsDecrypted,
 	IDataObject,
 	IExecuteFunctions,
 	ILoadOptionsFunctions,
-	INodeCredentialTestResult,
 	INodeExecutionData,
 	INodePropertyOptions,
 	INodeType,
@@ -151,7 +148,7 @@ export class QuackOnDemand implements INodeType {
 		usableAsTool: true,
 		inputs: ['main'],
 		outputs: ['main'],
-		credentials: [{ name: 'quackOnDemandApi', required: true, testedBy: 'quackConnectionTest' }],
+		credentials: [{ name: 'quackOnDemandApi', required: true }],
 		properties: [
 			// ── Resource ──────────────────────────────────────────────
 			{
@@ -387,30 +384,8 @@ export class QuackOnDemand implements INodeType {
 							value: col.name,
 						}));
 					},
-				},
-
-				// Connection test: connect via gRPC, run SELECT 1, close.
-				// Referenced by the credential's testedBy field.
-				credentialTest: {
-							async quackConnectionTest(
-											this: any,
-						credential: ICredentialsDecrypted<ICredentialDataDecryptedObject>,
-					): Promise<INodeCredentialTestResult> {
-						const data = credential.data;
-						if (!data) {
-							return { status: 'Error', message: 'No credential data provided' };
-						}
-						const cfg = credentialsToConfig(data);
-						const client = await QodClient.connect(cfg);
-						try {
-							await client.query('SELECT 1');
-							return { status: 'OK', message: 'Connection successful' };
-						} finally {
-							client.close();
-						}
-					},
-				},
-			};
+								},
+							};
 
 	// ── Execute ────────────────────────────────────────────────────────
 
