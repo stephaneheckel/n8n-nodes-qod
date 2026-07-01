@@ -281,12 +281,12 @@ export class QodClient {
 	}
 
 	// Core RPC: encode a command, call GetFlightInfo + DoGet, decode the Arrow
-	// stream, and return the rows as plain objects.
-	private async executeCommand(
+	// stream, and return the raw Arrow Table (with proper Buffer columns).
+	private async executeCommandRaw(
 		messageType: protobuf.Type,
 		payload: Record<string, unknown>,
 		commandName: string,
-	): Promise<Array<Record<string, unknown>>> {
+	): Promise<Table> {
 		const cmd = this.buildCommand(messageType, payload, commandName);
 
 		const info = await new Promise<any>((resolve, reject) => {
@@ -312,7 +312,16 @@ export class QodClient {
 			});
 		}
 
-		const table = tableFromIPC(Buffer.concat([...messages, EOS]));
+		return tableFromIPC(Buffer.concat([...messages, EOS]));
+	}
+
+	// Core RPC: same as above but returns plain-object rows (via rowToObject).
+	private async executeCommand(
+		messageType: protobuf.Type,
+		payload: Record<string, unknown>,
+		commandName: string,
+	): Promise<Array<Record<string, unknown>>> {
+		const table = await this.executeCommandRaw(messageType, payload, commandName);
 		return table.toArray().map((row) => rowToObject(row, table));
 	}
 
@@ -365,24 +374,35 @@ export class QodClient {
 	async getColumns(catalog: string, schema: string, table: string): Promise<CatalogRow[]> {
 		// Use CommandGetTables with include_schema=true and filter to the
 		// specific table.  The table_schema column is an Arrow Schema IPC blob
-		// that can be parsed into a proper Arrow Schema to list its fields.
-		const rows = await this.executeCommand(
+		// — we use executeCommandRaw to get the raw Arrow Table so Buffer
+		// columns are preserved (rowToObject corrupts them to "[object Buffer]").
+		const arrowTable = await this.executeCommandRaw(
 			this.getTablesType,
 			{ catalog, dbSchemaFilterPattern: schema, tableNameFilterPattern: table, includeSchema: true },
 			'CommandGetTables',
 		);
 
-		const target = rows.find((r) => String(r.table_name || '') === table);
-		if (!target) return [];
+		// Find the row for our table by scanning the Arrow table column.
+		const nameCol = arrowTable.getChild('table_name');
+		if (!nameCol) return [];
 
-		const schemaBytes: Buffer | undefined = target.table_schema as Buffer | undefined;
+		let targetIdx = -1;
+		for (let i = 0; i < arrowTable.numRows; i++) {
+			if (String(nameCol.get(i)) === table) {
+				targetIdx = i;
+				break;
+			}
+		}
+		if (targetIdx < 0) return [];
+
+		const schemaCol = arrowTable.getChild('table_schema');
+		if (!schemaCol) return [];
+		const schemaBytes = schemaCol.get(targetIdx) as Buffer | null;
 		if (!schemaBytes || schemaBytes.length === 0) return [];
 
 		// Parse the Arrow Schema IPC blob.
-		// `tableFromIPC` with a Schema-only payload returns a Table with 0 rows
-		// but a fully populated schema — we only need the schema portion.
-		const arrowTable = tableFromIPC(schemaBytes);
-		return arrowTable.schema.fields.map((field) => ({
+		const schemaTable = tableFromIPC(schemaBytes);
+		return schemaTable.schema.fields.map((field) => ({
 			name: field.name,
 			dataType: String(field.type),
 			nullable: field.nullable,
