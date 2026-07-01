@@ -14,8 +14,7 @@ import * as protobuf from 'protobufjs';
 import * as tls from 'node:tls';
 import { tableFromIPC, Table } from 'apache-arrow';
 
-const ANY_TYPE_URL =
-	'type.googleapis.com/arrow.flight.protocol.sql.CommandStatementQuery';
+const FLIGHTSQL_NAMESPACE = 'type.googleapis.com/arrow.flight.protocol.sql';
 
 // Minimal slice of Apache Arrow Flight (Flight.proto): only the messages and
 // RPCs this client uses.
@@ -61,20 +60,52 @@ message FlightData {
 }
 `;
 
-// Minimal slice of Flight SQL (FlightSql.proto). Any is declared as a plain
-// message because its wire format matches google.protobuf.Any.
+// Flight SQL (FlightSql.proto) messages. Any is declared as a plain message
+// because its wire format matches google.protobuf.Any.  Added catalog browsing
+// and DML commands so the n8n node can offer a zero-SQL table browser.
 const FLIGHTSQL_PROTO = `
 syntax = "proto3";
 package arrow.flight.protocol.sql;
+
+message Any {
+  string type_url = 1;
+  bytes value = 2;
+}
+
+// --- query / update ---
 
 message CommandStatementQuery {
   string query = 1;
   bytes transaction_id = 2;
 }
 
-message Any {
-  string type_url = 1;
-  bytes value = 2;
+message CommandStatementUpdate {
+  string query = 1;
+  bytes transaction_id = 2;
+}
+
+// --- catalog browsing ---
+
+message CommandGetCatalogs {}
+
+message CommandGetSchemas {
+  string catalog = 1;
+  string db_schema_filter_pattern = 2;
+}
+
+message CommandGetTables {
+  string catalog = 1;
+  string db_schema_filter_pattern = 2;
+  string table_name_filter_pattern = 3;
+  repeated string table_types = 4;
+  bool include_schema = 5;
+}
+
+message CommandGetColumns {
+  string catalog = 1;
+  string db_schema_filter_pattern = 2;
+  string table_name_filter_pattern = 3;
+  string column_name_filter_pattern = 4;
 }
 `;
 
@@ -90,6 +121,14 @@ export interface QodConfig {
 	tlsVerify: boolean;
 }
 
+export interface CatalogRow {
+	name: string;
+	type?: string;
+	schema?: string;
+	dataType?: string;
+	nullable?: boolean;
+}
+
 interface FlightClient extends grpc.Client {
 	GetFlightInfo(
 		descriptor: unknown,
@@ -97,6 +136,10 @@ interface FlightClient extends grpc.Client {
 		cb: (err: grpc.ServiceError | null, info: any) => void,
 	): void;
 	DoGet(ticket: unknown, metadata: grpc.Metadata): grpc.ClientReadableStream<any>;
+}
+
+function typeUrl(name: string): string {
+	return `${FLIGHTSQL_NAMESPACE}.${name}`;
 }
 
 // Pull the server's self-signed leaf certificate off the wire and return it as
@@ -154,12 +197,33 @@ function rowToObject(row: any, table: Table): Record<string, unknown> {
 }
 
 export class QodClient {
+	private readonly commandQueryType: protobuf.Type;
+	private readonly commandUpdateType: protobuf.Type;
+	private readonly getCatalogsType: protobuf.Type;
+	private readonly getSchemasType: protobuf.Type;
+	private readonly getTablesType: protobuf.Type;
+	private readonly getColumnsType: protobuf.Type;
+
 	private constructor(
 		private readonly client: FlightClient,
 		private readonly cfg: QodConfig,
-		private readonly any: protobuf.Type,
-		private readonly cmd: protobuf.Type,
-	) {}
+		private readonly anyType: protobuf.Type,
+		cmdTypes: {
+			commandQuery: protobuf.Type;
+			commandUpdate: protobuf.Type;
+			getCatalogs: protobuf.Type;
+			getSchemas: protobuf.Type;
+			getTables: protobuf.Type;
+			getColumns: protobuf.Type;
+		},
+	) {
+		this.commandQueryType = cmdTypes.commandQuery;
+		this.commandUpdateType = cmdTypes.commandUpdate;
+		this.getCatalogsType = cmdTypes.getCatalogs;
+		this.getSchemasType = cmdTypes.getSchemas;
+		this.getTablesType = cmdTypes.getTables;
+		this.getColumnsType = cmdTypes.getColumns;
+	}
 
 	static async connect(cfg: QodConfig): Promise<QodClient> {
 		const creds = await QodClient.credentials(cfg);
@@ -187,9 +251,16 @@ export class QodClient {
 		}
 		const client: FlightClient = new FlightService(`${cfg.host}:${cfg.port}`, creds, options);
 
-		const any = root.lookupType('arrow.flight.protocol.sql.Any');
-		const cmd = root.lookupType('arrow.flight.protocol.sql.CommandStatementQuery');
-		return new QodClient(client, cfg, any, cmd);
+		const anyType = root.lookupType('arrow.flight.protocol.sql.Any');
+		const cmdTypes = {
+			commandQuery: root.lookupType('arrow.flight.protocol.sql.CommandStatementQuery'),
+			commandUpdate: root.lookupType('arrow.flight.protocol.sql.CommandStatementUpdate'),
+			getCatalogs: root.lookupType('arrow.flight.protocol.sql.CommandGetCatalogs'),
+			getSchemas: root.lookupType('arrow.flight.protocol.sql.CommandGetSchemas'),
+			getTables: root.lookupType('arrow.flight.protocol.sql.CommandGetTables'),
+			getColumns: root.lookupType('arrow.flight.protocol.sql.CommandGetColumns'),
+		};
+		return new QodClient(client, cfg, anyType, cmdTypes);
 	}
 
 	private static async credentials(cfg: QodConfig): Promise<grpc.ChannelCredentials> {
@@ -214,34 +285,38 @@ export class QodClient {
 		return md;
 	}
 
-	// Build the FlightDescriptor.cmd: an Any-wrapped CommandStatementQuery.
-	private command(sql: string): Buffer {
-		const inner = this.cmd.encode({ query: sql }).finish();
-		// protobufjs exposes proto fields as camelCase, so `type_url` is `typeUrl`.
-		const any = this.any.encode({ typeUrl: ANY_TYPE_URL, value: inner }).finish();
+	// Build the FlightDescriptor.cmd: an Any-wrapped protobuf message.
+	private buildCommand(messageType: protobuf.Type, payload: Record<string, unknown>, commandName: string): Buffer {
+		const inner = messageType.encode(payload).finish();
+		const any = this.anyType.encode({ typeUrl: typeUrl(commandName), value: inner }).finish();
 		return Buffer.from(any);
 	}
 
-	// Run one SQL statement and return the rows as plain objects.
-	async query(sql: string): Promise<Array<Record<string, unknown>>> {
+	// Core RPC: encode a command, call GetFlightInfo + DoGet, decode the Arrow
+	// stream, and return the rows as plain objects.
+	private async executeCommand(
+		messageType: protobuf.Type,
+		payload: Record<string, unknown>,
+		commandName: string,
+	): Promise<Array<Record<string, unknown>>> {
+		const cmd = this.buildCommand(messageType, payload, commandName);
+
 		const info = await new Promise<any>((resolve, reject) => {
 			this.client.GetFlightInfo(
-				{ type: 'CMD', cmd: this.command(sql) },
+				{ type: 'CMD', cmd },
 				this.metadata(),
 				(err, resp) => (err ? reject(err) : resolve(resp)),
 			);
 		});
 
 		const messages: Buffer[] = [];
-		for (const endpoint of info.endpoint ?? []) {
+		const endpoints = info.endpoint || [];
+		for (const endpoint of endpoints) {
 			await new Promise<void>((resolve, reject) => {
 				const stream = this.client.DoGet({ ticket: endpoint.ticket.ticket }, this.metadata());
 				stream.on('data', (fd: any) => {
-					// protoLoader.fromJSON camelCases field names, so a FlightData chunk
-					// surfaces as dataHeader/dataBody; fall back to the snake_case names
-					// in case a future loader honours keepCase.
-					const header: Buffer = fd.dataHeader ?? fd.data_header ?? Buffer.alloc(0);
-					const body: Buffer = fd.dataBody ?? fd.data_body ?? Buffer.alloc(0);
+					const header: Buffer = fd.dataHeader || fd.data_header || Buffer.alloc(0);
+					const body: Buffer = fd.dataBody || fd.data_body || Buffer.alloc(0);
 					if (header.length > 0) messages.push(encapsulate(header, body));
 				});
 				stream.on('end', resolve);
@@ -251,6 +326,66 @@ export class QodClient {
 
 		const table = tableFromIPC(Buffer.concat([...messages, EOS]));
 		return table.toArray().map((row) => rowToObject(row, table));
+	}
+
+	// ── Public API ────────────────────────────────────────────────────────
+
+	// Run one SQL statement and return the rows as plain objects.
+	async query(sql: string): Promise<Array<Record<string, unknown>>> {
+		return this.executeCommand(this.commandQueryType, { query: sql }, 'CommandStatementQuery');
+	}
+
+	// Execute a DML / DDL statement (INSERT, UPDATE, DELETE, CREATE, etc.).
+	// Returns the Arrow stream which is typically empty for DML, but some
+	// statements (e.g. INSERT … RETURNING) may produce rows.
+	async update(sql: string): Promise<Array<Record<string, unknown>>> {
+		return this.executeCommand(this.commandUpdateType, { query: sql }, 'CommandStatementUpdate');
+	}
+
+	// ── Catalog operations ───────────────────────────────────────────────
+
+	async getCatalogs(): Promise<string[]> {
+		const rows = await this.executeCommand(this.getCatalogsType, {}, 'CommandGetCatalogs');
+		return rows.map((r) => String(r.catalog_name || ''));
+	}
+
+	async getSchemas(catalog: string): Promise<string[]> {
+		const rows = await this.executeCommand(
+			this.getSchemasType,
+			{ catalog, dbSchemaFilterPattern: '' },
+			'CommandGetSchemas',
+		);
+		return rows.map((r) => String(r.db_schema_name || ''));
+	}
+
+	async getTables(catalog: string, schema: string): Promise<CatalogRow[]> {
+		const rows = await this.executeCommand(
+			this.getTablesType,
+			{ catalog, dbSchemaFilterPattern: schema, tableNameFilterPattern: '', tableTypes: [], includeSchema: false },
+			'CommandGetTables',
+		);
+		return rows.map((r) => ({
+			name: String(r.table_name || ''),
+			type: String(r.table_type || 'TABLE'),
+		}));
+	}
+
+	async getColumns(catalog: string, schema: string, table: string): Promise<CatalogRow[]> {
+		const rows = await this.executeCommand(
+			this.getColumnsType,
+			{
+				catalog,
+				dbSchemaFilterPattern: schema,
+				tableNameFilterPattern: table,
+				columnNameFilterPattern: '',
+			},
+			'CommandGetColumns',
+		);
+		return rows.map((r) => ({
+			name: String(r.column_name || ''),
+			dataType: String(r.data_type || ''),
+			nullable: r.is_nullable !== undefined ? Boolean(r.is_nullable) : true,
+		}));
 	}
 
 	close(): void {

@@ -39,8 +39,9 @@
     "n8n-workflow": "*"
   },
   "devDependencies": {
-    "@types/node": "^20.14.10",
-    "n8n-workflow": "^1.60.0",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^20.19.43",
+    "n8n-workflow": "^1.120.19",
     "typescript": "^5.5.3"
   }
 }
