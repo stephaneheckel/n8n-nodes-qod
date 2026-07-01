@@ -25,20 +25,45 @@ function credentialsToConfig(c: Record<string, unknown>): QodConfig {
 	};
 }
 
-// Shared helper: open a connection, run a catalog call, return formatted
-// options. Used by all loadOptions methods.
+// Connection cache for loadOptions — avoids TLS handshake + gRPC connect
+// on every cascading dropdown call (tenant → schema → table → columns).
+// Cache keyed by credentials fingerprint, TTL 10s.
+const connectionCache = new Map<string, { client: QodClient; expires: number }>();
+const CACHE_TTL_MS = 10_000;
+
 async function withClient<T>(
 	ctx: ILoadOptionsFunctions,
 	fn: (client: QodClient) => Promise<T>,
 ): Promise<T> {
 	const creds = await ctx.getCredentials('quackOnDemandApi');
 	const cfg = credentialsToConfig(creds);
-	const client = await QodClient.connect(cfg);
-	try {
-		return await fn(client);
-	} finally {
-		client.close();
+	const key = `${cfg.host}:${cfg.port}:${cfg.tenant}:${cfg.user}`;
+
+	const cached = connectionCache.get(key);
+	if (cached && cached.expires > Date.now()) {
+		return fn(cached.client);
 	}
+
+	// Clean expired entries while we're here
+	for (const [k, v] of connectionCache) {
+		if (v.expires <= Date.now()) connectionCache.delete(k);
+	}
+
+	const client = await QodClient.connect(cfg);
+	connectionCache.set(key, { client, expires: Date.now() + CACHE_TTL_MS });
+	return fn(client);
+}
+
+// Parse type:'json' values — n8n returns a string for static JSON,
+// but may return an object for expressions ({{ }}). Normalize to an object.
+function parseValuesJson(raw: unknown): Record<string, unknown> {
+	if (typeof raw === 'string' && raw.trim()) {
+		try { return JSON.parse(raw); } catch { /* leave empty */ }
+	}
+	if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+		return raw as Record<string, unknown>;
+	}
+	return {};
 }
 
 // ── Resource handlers (free functions — execute() has 'this: IExecuteFunctions') ──
@@ -60,12 +85,7 @@ async function handleTableBatchInsert(
 	for (let i = 0; i < items.length; i++) {
 		const inputJson = items[i]?.json || {};
 		const rawValues = exec.getNodeParameter('valuesJson', i, {}) as unknown;
-		let valuesObj: Record<string, unknown> = {};
-		if (typeof rawValues === 'string' && rawValues.trim()) {
-			try { valuesObj = JSON.parse(rawValues); } catch { /* leave empty */ }
-		} else if (rawValues && typeof rawValues === 'object' && !Array.isArray(rawValues)) {
-			valuesObj = rawValues as Record<string, unknown>;
-		}
+		const valuesObj = parseValuesJson(rawValues);
 		const data: Record<string, unknown> = { ...inputJson, ...(Object.keys(valuesObj).length > 0 ? valuesObj : {}) };
 		if (Object.keys(data).length > 0) {
 			Object.keys(data).forEach((k) => allKeys.add(k));
@@ -142,13 +162,7 @@ async function handleTable(
 		const items = exec.getInputData();
 		const inputJson = items[itemIndex]?.json || {};
 		const rawValues = exec.getNodeParameter('valuesJson', itemIndex, {}) as unknown;
-		// type:'json' returns a string — parse it. Expressions ({{ }}) may already be resolved to an object.
-		let valuesObj: Record<string, unknown> = {};
-		if (typeof rawValues === 'string' && rawValues.trim()) {
-			try { valuesObj = JSON.parse(rawValues); } catch { /* leave empty */ }
-		} else if (rawValues && typeof rawValues === 'object' && !Array.isArray(rawValues)) {
-			valuesObj = rawValues as Record<string, unknown>;
-		}
+		const valuesObj = parseValuesJson(rawValues);
 		const data: Record<string, unknown> = { ...inputJson, ...(Object.keys(valuesObj).length > 0 ? valuesObj : {}) };
 		if (Object.keys(data).length === 0) {
 			throw new NodeOperationError(exec.getNode(), 'No data to insert. Provide Values (JSON) or pass data from an upstream node.', { itemIndex });
@@ -173,13 +187,7 @@ async function handleTable(
 		const items = exec.getInputData();
 		const inputJson = items[itemIndex]?.json || {};
 		const rawValues = exec.getNodeParameter('valuesJson', itemIndex, {}) as unknown;
-		// type:'json' returns a string — parse it.
-		let valuesObj: Record<string, unknown> = {};
-		if (typeof rawValues === 'string' && rawValues.trim()) {
-			try { valuesObj = JSON.parse(rawValues); } catch { /* leave empty */ }
-		} else if (rawValues && typeof rawValues === 'object' && !Array.isArray(rawValues)) {
-			valuesObj = rawValues as Record<string, unknown>;
-		}
+		const valuesObj = parseValuesJson(rawValues);
 		const data: Record<string, unknown> = { ...inputJson, ...(Object.keys(valuesObj).length > 0 ? valuesObj : {}) };
 		if (Object.keys(data).length === 0) {
 			throw new NodeOperationError(exec.getNode(), 'No data to update. Provide Values (JSON) or pass data from an upstream node.', { itemIndex });
