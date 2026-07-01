@@ -1,7 +1,10 @@
 import {
+	ICredentialDataDecryptedObject,
+	ICredentialsDecrypted,
 	IDataObject,
 	IExecuteFunctions,
 	ILoadOptionsFunctions,
+	INodeCredentialTestResult,
 	INodeExecutionData,
 	INodePropertyOptions,
 	INodeType,
@@ -148,7 +151,7 @@ export class QuackOnDemand implements INodeType {
 		usableAsTool: true,
 		inputs: ['main'],
 		outputs: ['main'],
-		credentials: [{ name: 'quackOnDemandApi', required: true }],
+		credentials: [{ name: 'quackOnDemandApi', required: true, testedBy: 'quackConnectionTest' }],
 		properties: [
 			// ── Resource ──────────────────────────────────────────────
 			{
@@ -348,44 +351,66 @@ export class QuackOnDemand implements INodeType {
 	// ── Load Options (dynamic dropdowns) ────────────────────────────────
 
 	methods = {
-		loadOptions: {
-			// List all databases / catalogs.
-			async getTenants(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-				const cats = await withClient(this, (c) => c.getCatalogs());
-				return cats.map((name) => ({ name, value: name }));
-			},
+				loadOptions: {
+					// List all databases / catalogs.
+					async getTenants(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+						const cats = await withClient(this, (c) => c.getCatalogs());
+						return cats.map((name) => ({ name, value: name }));
+					},
 
-			// List schemas inside the selected tenant.
-			async getSchemas(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-				const tenant = this.getNodeParameter('tenant', 0) as string;
-				if (!tenant) return [];
-				const schemas = await withClient(this, (c) => c.getSchemas(tenant));
-				return schemas.map((name) => ({ name, value: name }));
-			},
+					// List schemas inside the selected tenant.
+					async getSchemas(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+						const tenant = this.getNodeParameter('tenant', 0) as string;
+						if (!tenant) return [];
+						const schemas = await withClient(this, (c) => c.getSchemas(tenant));
+						return schemas.map((name) => ({ name, value: name }));
+					},
 
-			// List tables / views inside the selected tenant + schema.
-			async getTables(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-				const tenant = this.getNodeParameter('tenant', 0) as string;
-				const schema = this.getNodeParameter('schema', 0) as string;
-				if (!tenant || !schema) return [];
-				const tables = await withClient(this, (c) => c.getTables(tenant, schema));
-				return tables.map((t) => ({ name: `${t.name} (${t.type})`, value: t.name }));
-			},
+					// List tables / views inside the selected tenant + schema.
+					async getTables(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+						const tenant = this.getNodeParameter('tenant', 0) as string;
+						const schema = this.getNodeParameter('schema', 0) as string;
+						if (!tenant || !schema) return [];
+						const tables = await withClient(this, (c) => c.getTables(tenant, schema));
+						return tables.map((t) => ({ name: `${t.name} (${t.type})`, value: t.name }));
+					},
 
-			// List columns of the selected table.
-			async getColumns(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-				const tenant = this.getNodeParameter('tenant', 0) as string;
-				const schema = this.getNodeParameter('schema', 0) as string;
-				const table = this.getNodeParameter('table', 0) as string;
-				if (!tenant || !schema || !table) return [];
-				const cols = await withClient(this, (c) => c.getColumns(tenant, schema, table));
-				return cols.map((col) => ({
-					name: `${col.name}  (${col.dataType}${col.nullable ? '' : ', NOT NULL'})`,
-					value: col.name,
-				}));
-			},
-		},
-	};
+					// List columns of the selected table.
+					async getColumns(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+						const tenant = this.getNodeParameter('tenant', 0) as string;
+						const schema = this.getNodeParameter('schema', 0) as string;
+						const table = this.getNodeParameter('table', 0) as string;
+						if (!tenant || !schema || !table) return [];
+						const cols = await withClient(this, (c) => c.getColumns(tenant, schema, table));
+						return cols.map((col) => ({
+							name: `${col.name}  (${col.dataType}${col.nullable ? '' : ', NOT NULL'})`,
+							value: col.name,
+						}));
+					},
+				},
+
+				// Connection test: connect via gRPC, run SELECT 1, close.
+				// Referenced by the credential's testedBy field.
+				credentialTest: {
+							async quackConnectionTest(
+											this: any,
+						credential: ICredentialsDecrypted<ICredentialDataDecryptedObject>,
+					): Promise<INodeCredentialTestResult> {
+						const data = credential.data;
+						if (!data) {
+							return { status: 'Error', message: 'No credential data provided' };
+						}
+						const cfg = credentialsToConfig(data);
+						const client = await QodClient.connect(cfg);
+						try {
+							await client.query('SELECT 1');
+							return { status: 'OK', message: 'Connection successful' };
+						} finally {
+							client.close();
+						}
+					},
+				},
+			};
 
 	// ── Execute ────────────────────────────────────────────────────────
 
