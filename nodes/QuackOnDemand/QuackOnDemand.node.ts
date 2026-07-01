@@ -52,9 +52,13 @@ async function handleQuery(
 	const sql = exec.getNodeParameter('query', itemIndex) as string;
 
 	if (operation === 'executeUpdate') {
-		return client.update(sql);
+		const rows = await client.query(sql);  // DDL/DML via query() — DuckDB compatible
+		if (rows.length === 0) return [{ statement: 'OK' }];
+		return rows;
 	}
-	return client.query(sql);
+	const rows = await client.query(sql);
+	if (rows.length === 0) return [{ result: 'No rows returned' }];
+	return rows;
 }
 
 async function handleTable(
