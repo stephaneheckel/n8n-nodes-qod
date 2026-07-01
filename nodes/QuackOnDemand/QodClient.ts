@@ -348,7 +348,7 @@ export class QodClient {
 	async getSchemas(catalog: string): Promise<string[]> {
 		const rows = await this.executeCommand(
 			this.getDbSchemasType,
-			{ catalog, dbSchemaFilterPattern: '' },
+			{ catalog },
 			'CommandGetDbSchemas',
 		);
 		return rows.map((r) => String(r.db_schema_name || ''));
@@ -357,7 +357,7 @@ export class QodClient {
 	async getTables(catalog: string, schema: string): Promise<CatalogRow[]> {
 		const rows = await this.executeCommand(
 			this.getTablesType,
-			{ catalog, dbSchemaFilterPattern: schema, tableNameFilterPattern: '', tableTypes: [], includeSchema: false },
+			{ catalog, dbSchemaFilterPattern: schema },
 			'CommandGetTables',
 		);
 		return rows.map((r) => ({
