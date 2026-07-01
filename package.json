@@ -13,8 +13,9 @@
   "homepage": "https://github.com/starlake-ai/quack-on-demand",
   "main": "index.js",
   "scripts": {
-    "build": "tsc && node scripts/copy-icons.mjs",
-    "dev": "tsc --watch",
+    "build": "tsc && node scripts/copy-icons.mjs && node scripts/patch-dist-package.cjs",
+    "dev": "npm run build && cross-env N8N_CUSTOM_EXTENSIONS=dist n8n start",
+    "dev:watch": "tsc --watch",
     "prepublishOnly": "npm run build"
   },
   "files": [
@@ -41,6 +42,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^20.19.43",
+    "cross-env": "^10.1.0",
     "n8n-workflow": "^1.120.19",
     "typescript": "^5.5.3"
   }
