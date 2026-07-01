@@ -343,26 +343,30 @@ export class QodClient {
 	}
 
 	// ── Catalog operations ───────────────────────────────────────────────
+	//
+	// The Quack on Demand edge supports CommandGetCatalogs natively but not
+	// the other FlightSQL catalog commands (GetSchemas, GetTables, GetColumns).
+	// We fall back to SQL queries against DuckDB's information_schema for those.
+
+	private esc(s: string): string {
+		return s.replace(/'/g, "''");
+	}
 
 	async getCatalogs(): Promise<string[]> {
 		const rows = await this.executeCommand(this.getCatalogsType, {}, 'CommandGetCatalogs');
 		return rows.map((r) => String(r.catalog_name || ''));
 	}
 
-	async getSchemas(catalog: string): Promise<string[]> {
-		const rows = await this.executeCommand(
-			this.getSchemasType,
-			{ catalog, dbSchemaFilterPattern: '' },
-			'CommandGetSchemas',
+	async getSchemas(_catalog: string): Promise<string[]> {
+		const rows = await this.query(
+			`SELECT schema_name FROM information_schema.schemata ORDER BY schema_name`,
 		);
-		return rows.map((r) => String(r.db_schema_name || ''));
+		return rows.map((r) => String(r.schema_name || ''));
 	}
 
-	async getTables(catalog: string, schema: string): Promise<CatalogRow[]> {
-		const rows = await this.executeCommand(
-			this.getTablesType,
-			{ catalog, dbSchemaFilterPattern: schema, tableNameFilterPattern: '', tableTypes: [], includeSchema: false },
-			'CommandGetTables',
+	async getTables(_catalog: string, schema: string): Promise<CatalogRow[]> {
+		const rows = await this.query(
+			`SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = '${this.esc(schema)}' ORDER BY table_name`,
 		);
 		return rows.map((r) => ({
 			name: String(r.table_name || ''),
@@ -370,21 +374,14 @@ export class QodClient {
 		}));
 	}
 
-	async getColumns(catalog: string, schema: string, table: string): Promise<CatalogRow[]> {
-		const rows = await this.executeCommand(
-			this.getColumnsType,
-			{
-				catalog,
-				dbSchemaFilterPattern: schema,
-				tableNameFilterPattern: table,
-				columnNameFilterPattern: '',
-			},
-			'CommandGetColumns',
+	async getColumns(_catalog: string, schema: string, table: string): Promise<CatalogRow[]> {
+		const rows = await this.query(
+			`SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = '${this.esc(schema)}' AND table_name = '${this.esc(table)}' ORDER BY ordinal_position`,
 		);
 		return rows.map((r) => ({
 			name: String(r.column_name || ''),
 			dataType: String(r.data_type || ''),
-			nullable: r.is_nullable !== undefined ? Boolean(r.is_nullable) : true,
+			nullable: r.is_nullable === true || r.is_nullable === 'YES',
 		}));
 	}
 
