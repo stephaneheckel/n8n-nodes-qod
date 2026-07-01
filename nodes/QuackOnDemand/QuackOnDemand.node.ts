@@ -53,11 +53,11 @@ async function handleQuery(
 
 	if (operation === 'executeUpdate') {
 		const rows = await client.query(sql);  // DDL/DML via query() — DuckDB compatible
-		if (rows.length === 0) return [{ statement: 'OK' }];
+		if (rows.length === 0) return [{ success: true, message: 'Statement executed successfully' }];
 		return rows;
 	}
 	const rows = await client.query(sql);
-	if (rows.length === 0) return [{ result: 'No rows returned' }];
+	if (rows.length === 0) return [{ success: true, message: 'Query executed — no rows returned' }];
 	return rows;
 }
 
