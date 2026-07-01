@@ -1,4 +1,4 @@
-# n8n-nodes-quack-on-demand
+# n8n-nodes-qod
 
 An [n8n](https://n8n.io/) community node that runs SQL and browses the catalog
 of a [Quack on Demand](https://github.com/starlake-ai/quack-on-demand) FlightSQL
@@ -77,7 +77,7 @@ All catalog operations use the native FlightSQL commands
 
 ### From npm (recommended)
 
-Settings → Community Nodes → Install, then enter `n8n-nodes-quack-on-demand`.
+Settings → Community Nodes → Install, then enter `n8n-nodes-qod`.
 A self-hosted n8n instance is required (community nodes are not available on
 n8n Cloud's verified-only mode unless verified).
 
