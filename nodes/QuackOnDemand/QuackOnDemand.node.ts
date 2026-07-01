@@ -43,6 +43,57 @@ async function withClient<T>(
 
 // ── Resource handlers (free functions — execute() has 'this: IExecuteFunctions') ──
 
+// Batch insert: collect values from all items, send a single multi-row INSERT.
+async function handleTableBatchInsert(
+	exec: IExecuteFunctions,
+	client: QodClient,
+	items: INodeExecutionData[],
+): Promise<Array<Record<string, unknown>>> {
+	const schema = exec.getNodeParameter('schema', 0) as string;
+	const tableName = exec.getNodeParameter('table', 0) as string;
+	const selectedColumns = exec.getNodeParameter('columns', 0, []) as string[];
+
+	// Collect all columns from selected or union of all keys
+	const allKeys = new Set<string>();
+	const allValues: Array<Record<string, unknown>> = [];
+
+	for (let i = 0; i < items.length; i++) {
+		const inputJson = items[i]?.json || {};
+		const rawValues = exec.getNodeParameter('valuesJson', i, {}) as unknown;
+		let valuesObj: Record<string, unknown> = {};
+		if (typeof rawValues === 'string' && rawValues.trim()) {
+			try { valuesObj = JSON.parse(rawValues); } catch { /* leave empty */ }
+		} else if (rawValues && typeof rawValues === 'object' && !Array.isArray(rawValues)) {
+			valuesObj = rawValues as Record<string, unknown>;
+		}
+		const data: Record<string, unknown> = { ...inputJson, ...(Object.keys(valuesObj).length > 0 ? valuesObj : {}) };
+		if (Object.keys(data).length > 0) {
+			Object.keys(data).forEach((k) => allKeys.add(k));
+			allValues.push(data);
+		}
+	}
+
+	if (allValues.length === 0) {
+		throw new NodeOperationError(exec.getNode(), 'No data to insert across any input item.', { itemIndex: 0 });
+	}
+
+	const cols = selectedColumns.length > 0 ? selectedColumns : Array.from(allKeys);
+
+	const valuesRows = allValues.map((data) => {
+		const vals = cols.map((col) => {
+			const val = data[col];
+			if (val === undefined || val === null) return 'NULL';
+			if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+			return `'${String(val).replace(/'/g, "''")}'`;
+		});
+		return `(${vals.join(', ')})`;
+	});
+
+	const sql = `INSERT INTO ${schema}.${tableName} (${cols.join(', ')}) VALUES ${valuesRows.join(', ')}`;
+	await client.query(sql);
+	return [{ success: true, message: `Inserted ${allValues.length} rows` }];
+}
+
 async function handleQuery(
 	exec: IExecuteFunctions,
 	client: QodClient,
@@ -473,6 +524,31 @@ export class QuackOnDemand implements INodeType {
 		const client = await QodClient.connect(cfg);
 		const out: INodeExecutionData[] = [];
 		const resource = this.getNodeParameter('resource', 0) as string;
+
+		// Batch Insert: collect all rows, send one multi-VALUES INSERT
+		if (resource === 'table') {
+			const operation = this.getNodeParameter('operation', 0) as string;
+			if (operation === 'insert' && items.length > 1) {
+				try {
+					const rows = await handleTableBatchInsert(this, client, items);
+					for (const row of rows) {
+						out.push({ json: row as IDataObject, pairedItem: { item: 0 } });
+					}
+				} catch (error) {
+					if (this.continueOnFail()) {
+						out.push({
+							json: { error: (error as Error).message },
+							error: error as NodeOperationError,
+							pairedItem: { item: 0 },
+						} as INodeExecutionData);
+					} else {
+						throw new NodeOperationError(this.getNode(), error as Error, { itemIndex: 0 });
+					}
+				}
+				client.close();
+				return [out];
+			}
+		}
 
 		try {
 			for (let i = 0; i < items.length; i++) {
