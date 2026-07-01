@@ -164,9 +164,9 @@ async function handleTable(
 			return `'${String(val).replace(/'/g, "''")}'`;
 		});
 
-		const sql = `INSERT INTO ${schema}.${tableName} (${cols.join(', ')}) VALUES (${vals.join(', ')}) RETURNING *`;
-		const rows = await client.query(sql);
-		return [{ query: sql, rows_affected: rows.length }];
+		const sql = `INSERT INTO ${schema}.${tableName} (${cols.join(', ')}) VALUES (${vals.join(', ')})`;
+		await client.query(sql);
+		return [{ query: sql, rows_affected: 1 }];
 	}
 
 	if (operation === 'update') {
@@ -199,9 +199,12 @@ async function handleTable(
 			return `${col} = '${String(val).replace(/'/g, "''")}'`;
 		});
 
-		const sql = `UPDATE ${schema}.${tableName} SET ${sets.join(', ')} WHERE ${filter.trim()} RETURNING *`;
-		const rows = await client.query(sql);
-		return [{ query: sql, rows_affected: rows.length }];
+		const sql = `UPDATE ${schema}.${tableName} SET ${sets.join(', ')} WHERE ${filter.trim()}`;
+		// DuckLake tables don't support RETURNING — count first
+		const countRows = await client.query(`SELECT COUNT(*) as cnt FROM ${schema}.${tableName} WHERE ${filter.trim()}`);
+		const cnt = (countRows[0] as Record<string, unknown>).cnt || 0;
+		await client.query(sql);
+		return [{ query: sql, rows_affected: cnt }];
 	}
 
 	if (operation === 'delete') {
@@ -210,9 +213,12 @@ async function handleTable(
 			throw new NodeOperationError(exec.getNode(), 'A WHERE clause is required for DELETE.', { itemIndex });
 		}
 
-		const sql = `DELETE FROM ${schema}.${tableName} WHERE ${filter.trim()} RETURNING *`;
-		const rows = await client.query(sql);
-		return [{ query: sql, rows_affected: rows.length }];
+		const sql = `DELETE FROM ${schema}.${tableName} WHERE ${filter.trim()}`;
+		// DuckLake tables don't support RETURNING — count first
+		const countRows = await client.query(`SELECT COUNT(*) as cnt FROM ${schema}.${tableName} WHERE ${filter.trim()}`);
+		const cnt = (countRows[0] as Record<string, unknown>).cnt || 0;
+		await client.query(sql);
+		return [{ query: sql, rows_affected: cnt }];
 	}
 
 	throw new NodeOperationError(
