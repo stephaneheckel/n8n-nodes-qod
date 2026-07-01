@@ -88,7 +88,7 @@ message CommandStatementUpdate {
 
 message CommandGetCatalogs {}
 
-message CommandGetSchemas {
+message CommandGetDbSchemas {
   string catalog = 1;
   string db_schema_filter_pattern = 2;
 }
@@ -99,15 +99,7 @@ message CommandGetTables {
   string table_name_filter_pattern = 3;
   repeated string table_types = 4;
   bool include_schema = 5;
-}
-
-message CommandGetColumns {
-  string catalog = 1;
-  string db_schema_filter_pattern = 2;
-  string table_name_filter_pattern = 3;
-  string column_name_filter_pattern = 4;
-}
-`;
+}`;
 
 export interface QodConfig {
 	host: string;
@@ -200,9 +192,8 @@ export class QodClient {
 	private readonly commandQueryType: protobuf.Type;
 	private readonly commandUpdateType: protobuf.Type;
 	private readonly getCatalogsType: protobuf.Type;
-	private readonly getSchemasType: protobuf.Type;
+	private readonly getDbSchemasType: protobuf.Type;
 	private readonly getTablesType: protobuf.Type;
-	private readonly getColumnsType: protobuf.Type;
 
 	private constructor(
 		private readonly client: FlightClient,
@@ -212,17 +203,15 @@ export class QodClient {
 			commandQuery: protobuf.Type;
 			commandUpdate: protobuf.Type;
 			getCatalogs: protobuf.Type;
-			getSchemas: protobuf.Type;
+			getDbSchemas: protobuf.Type;
 			getTables: protobuf.Type;
-			getColumns: protobuf.Type;
 		},
 	) {
 		this.commandQueryType = cmdTypes.commandQuery;
 		this.commandUpdateType = cmdTypes.commandUpdate;
 		this.getCatalogsType = cmdTypes.getCatalogs;
-		this.getSchemasType = cmdTypes.getSchemas;
+		this.getDbSchemasType = cmdTypes.getDbSchemas;
 		this.getTablesType = cmdTypes.getTables;
-		this.getColumnsType = cmdTypes.getColumns;
 	}
 
 	static async connect(cfg: QodConfig): Promise<QodClient> {
@@ -256,9 +245,8 @@ export class QodClient {
 			commandQuery: root.lookupType('arrow.flight.protocol.sql.CommandStatementQuery'),
 			commandUpdate: root.lookupType('arrow.flight.protocol.sql.CommandStatementUpdate'),
 			getCatalogs: root.lookupType('arrow.flight.protocol.sql.CommandGetCatalogs'),
-			getSchemas: root.lookupType('arrow.flight.protocol.sql.CommandGetSchemas'),
+			getDbSchemas: root.lookupType('arrow.flight.protocol.sql.CommandGetDbSchemas'),
 			getTables: root.lookupType('arrow.flight.protocol.sql.CommandGetTables'),
-			getColumns: root.lookupType('arrow.flight.protocol.sql.CommandGetColumns'),
 		};
 		return new QodClient(client, cfg, anyType, cmdTypes);
 	}
@@ -344,9 +332,9 @@ export class QodClient {
 
 	// ── Catalog operations ───────────────────────────────────────────────
 	//
-	// The Quack on Demand edge supports CommandGetCatalogs natively but not
-	// the other FlightSQL catalog commands (GetSchemas, GetTables, GetColumns).
-	// We fall back to SQL queries against DuckDB's information_schema for those.
+	// QoD implements the standard FlightSQL catalog protocol.
+	// getColumns uses SQL because FlightSQL has no CommandGetColumns
+	// (columns are retrieved via CommandGetTables with include_schema=true).
 
 	private esc(s: string): string {
 		return s.replace(/'/g, "''");
@@ -357,16 +345,20 @@ export class QodClient {
 		return rows.map((r) => String(r.catalog_name || ''));
 	}
 
-	async getSchemas(_catalog: string): Promise<string[]> {
-		const rows = await this.query(
-			`SELECT schema_name FROM information_schema.schemata ORDER BY schema_name`,
+	async getSchemas(catalog: string): Promise<string[]> {
+		const rows = await this.executeCommand(
+			this.getDbSchemasType,
+			{ catalog, dbSchemaFilterPattern: '' },
+			'CommandGetDbSchemas',
 		);
-		return rows.map((r) => String(r.schema_name || ''));
+		return rows.map((r) => String(r.db_schema_name || ''));
 	}
 
-	async getTables(_catalog: string, schema: string): Promise<CatalogRow[]> {
-		const rows = await this.query(
-			`SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = '${this.esc(schema)}' ORDER BY table_name`,
+	async getTables(catalog: string, schema: string): Promise<CatalogRow[]> {
+		const rows = await this.executeCommand(
+			this.getTablesType,
+			{ catalog, dbSchemaFilterPattern: schema, tableNameFilterPattern: '', tableTypes: [], includeSchema: false },
+			'CommandGetTables',
 		);
 		return rows.map((r) => ({
 			name: String(r.table_name || ''),
