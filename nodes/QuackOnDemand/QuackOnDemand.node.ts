@@ -85,18 +85,19 @@ async function handleTable(
 
 	if (operation === 'insert') {
 		const items = exec.getInputData();
-		const inputJson = items[itemIndex]?.json;
-		if (!inputJson || Object.keys(inputJson).length === 0) {
-			throw new NodeOperationError(exec.getNode(), 'No data in the input item to insert.', { itemIndex });
+		const inputJson = items[itemIndex]?.json || {};
+		const valuesJson = exec.getNodeParameter('valuesJson', itemIndex, {}) as Record<string, unknown>;
+		// Merge: valuesJson takes precedence over input JSON keys
+		const data: Record<string, unknown> = { ...inputJson, ...(valuesJson && Object.keys(valuesJson).length > 0 ? valuesJson : {}) };
+		if (Object.keys(data).length === 0) {
+			throw new NodeOperationError(exec.getNode(), 'No data to insert. Provide Values (JSON) or pass data from an upstream node.', { itemIndex });
 		}
 
 		const selectedColumns = exec.getNodeParameter('columns', itemIndex, []) as string[];
-		// If columns not specified, use all keys from the input JSON
-		const cols = selectedColumns.length > 0 ? selectedColumns : Object.keys(inputJson);
+		const cols = selectedColumns.length > 0 ? selectedColumns : Object.keys(data);
 
-		// Build VALUES with proper quoting (strings get quoted, numbers/booleans pass through)
 		const vals = cols.map((col) => {
-			const val = inputJson[col];
+			const val = data[col];
 			if (val === undefined || val === null) return 'NULL';
 			if (typeof val === 'number' || typeof val === 'boolean') return String(val);
 			return `'${String(val).replace(/'/g, "''")}'`;
@@ -109,9 +110,11 @@ async function handleTable(
 
 	if (operation === 'update') {
 		const items = exec.getInputData();
-		const inputJson = items[itemIndex]?.json;
-		if (!inputJson || Object.keys(inputJson).length === 0) {
-			throw new NodeOperationError(exec.getNode(), 'No data in the input item to update.', { itemIndex });
+		const inputJson = items[itemIndex]?.json || {};
+		const valuesJson = exec.getNodeParameter('valuesJson', itemIndex, {}) as Record<string, unknown>;
+		const data: Record<string, unknown> = { ...inputJson, ...(valuesJson && Object.keys(valuesJson).length > 0 ? valuesJson : {}) };
+		if (Object.keys(data).length === 0) {
+			throw new NodeOperationError(exec.getNode(), 'No data to update. Provide Values (JSON) or pass data from an upstream node.', { itemIndex });
 		}
 
 		const selectedColumns = exec.getNodeParameter('columns', itemIndex, []) as string[];
@@ -120,9 +123,9 @@ async function handleTable(
 			throw new NodeOperationError(exec.getNode(), 'A WHERE clause is required for UPDATE.', { itemIndex });
 		}
 
-		const cols = selectedColumns.length > 0 ? selectedColumns : Object.keys(inputJson);
+		const cols = selectedColumns.length > 0 ? selectedColumns : Object.keys(data);
 		const sets = cols.map((col) => {
-			const val = inputJson[col];
+			const val = data[col];
 			if (val === undefined || val === null) return `${col} = NULL`;
 			if (typeof val === 'number' || typeof val === 'boolean') return `${col} = ${val}`;
 			return `${col} = '${String(val).replace(/'/g, "''")}'`;
@@ -357,15 +360,24 @@ export class QuackOnDemand implements INodeType {
 			},
 
 			// ── TABLE-specific fields (Insert / Update) ───────────────
-			{
-				displayName: 'Columns',
-				name: 'columns',
-				type: 'multiOptions',
-				displayOptions: { show: { resource: ['table'], operation: ['insert', 'update'] } },
-				typeOptions: { loadOptionsMethod: 'getColumns', loadOptionsDependsOn: ['tenant', 'schema', 'table'] },
-				default: [],
-				description: 'Columns to insert/update. Empty = use all keys from the input JSON.',
-			},
+				{
+					displayName: 'Columns',
+					name: 'columns',
+					type: 'multiOptions',
+					displayOptions: { show: { resource: ['table'], operation: ['insert', 'update'] } },
+					typeOptions: { loadOptionsMethod: 'getColumns', loadOptionsDependsOn: ['tenant', 'schema', 'table'] },
+					default: [],
+					description: 'Columns to insert/update. Empty = use all keys from Values or input JSON.',
+				},
+				{
+					displayName: 'Values (JSON)',
+					name: 'valuesJson',
+					type: 'json',
+					displayOptions: { show: { resource: ['table'], operation: ['insert', 'update'] } },
+					default: '{}',
+					description:
+						'Static values as JSON, e.g. {"c_name": "John", "c_acctbal": 100}. Leave empty to auto-map from the input item JSON. Expressions like {{ $json.name }} are supported.',
+				},
 
 			// ── TABLE-specific fields (Update / Delete) ───────────────
 			{
