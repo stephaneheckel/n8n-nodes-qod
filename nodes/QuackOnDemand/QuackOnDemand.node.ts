@@ -90,9 +90,15 @@ async function handleTable(
 	if (operation === 'insert') {
 		const items = exec.getInputData();
 		const inputJson = items[itemIndex]?.json || {};
-		const valuesJson = exec.getNodeParameter('valuesJson', itemIndex, {}) as Record<string, unknown>;
-		// Merge: valuesJson takes precedence over input JSON keys
-		const data: Record<string, unknown> = { ...inputJson, ...(valuesJson && Object.keys(valuesJson).length > 0 ? valuesJson : {}) };
+		const rawValues = exec.getNodeParameter('valuesJson', itemIndex, {}) as unknown;
+		// type:'json' returns a string — parse it. Expressions ({{ }}) may already be resolved to an object.
+		let valuesObj: Record<string, unknown> = {};
+		if (typeof rawValues === 'string' && rawValues.trim()) {
+			try { valuesObj = JSON.parse(rawValues); } catch { /* leave empty */ }
+		} else if (rawValues && typeof rawValues === 'object' && !Array.isArray(rawValues)) {
+			valuesObj = rawValues as Record<string, unknown>;
+		}
+		const data: Record<string, unknown> = { ...inputJson, ...(Object.keys(valuesObj).length > 0 ? valuesObj : {}) };
 		if (Object.keys(data).length === 0) {
 			throw new NodeOperationError(exec.getNode(), 'No data to insert. Provide Values (JSON) or pass data from an upstream node.', { itemIndex });
 		}
@@ -115,8 +121,15 @@ async function handleTable(
 	if (operation === 'update') {
 		const items = exec.getInputData();
 		const inputJson = items[itemIndex]?.json || {};
-		const valuesJson = exec.getNodeParameter('valuesJson', itemIndex, {}) as Record<string, unknown>;
-		const data: Record<string, unknown> = { ...inputJson, ...(valuesJson && Object.keys(valuesJson).length > 0 ? valuesJson : {}) };
+		const rawValues = exec.getNodeParameter('valuesJson', itemIndex, {}) as unknown;
+		// type:'json' returns a string — parse it.
+		let valuesObj: Record<string, unknown> = {};
+		if (typeof rawValues === 'string' && rawValues.trim()) {
+			try { valuesObj = JSON.parse(rawValues); } catch { /* leave empty */ }
+		} else if (rawValues && typeof rawValues === 'object' && !Array.isArray(rawValues)) {
+			valuesObj = rawValues as Record<string, unknown>;
+		}
+		const data: Record<string, unknown> = { ...inputJson, ...(Object.keys(valuesObj).length > 0 ? valuesObj : {}) };
 		if (Object.keys(data).length === 0) {
 			throw new NodeOperationError(exec.getNode(), 'No data to update. Provide Values (JSON) or pass data from an upstream node.', { itemIndex });
 		}
