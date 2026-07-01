@@ -104,7 +104,7 @@ async function handleTable(
 		});
 
 		const sql = `INSERT INTO ${schema}.${tableName} (${cols.join(', ')}) VALUES (${vals.join(', ')})`;
-		await client.update(sql);
+		await client.query(sql);  // DuckDB handles DML via query() — safer than update()
 		return [{ query: sql, rows_affected: 1 }];
 	}
 
@@ -132,7 +132,7 @@ async function handleTable(
 		});
 
 		const sql = `UPDATE ${schema}.${tableName} SET ${sets.join(', ')} WHERE ${filter.trim()}`;
-		await client.update(sql);
+		await client.query(sql);  // DuckDB handles DML via query()
 		return [{ query: sql, rows_affected: 1 }];
 	}
 
@@ -143,7 +143,7 @@ async function handleTable(
 		}
 
 		const sql = `DELETE FROM ${schema}.${tableName} WHERE ${filter.trim()}`;
-		await client.update(sql);
+		await client.query(sql);  // DuckDB handles DML via query()
 		return [{ query: sql, rows_affected: 1 }];
 	}
 
