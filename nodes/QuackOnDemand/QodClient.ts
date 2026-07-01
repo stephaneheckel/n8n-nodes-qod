@@ -333,12 +333,8 @@ export class QodClient {
 	// ── Catalog operations ───────────────────────────────────────────────
 	//
 	// QoD implements the standard FlightSQL catalog protocol.
-	// getColumns uses SQL because FlightSQL has no CommandGetColumns
-	// (columns are retrieved via CommandGetTables with include_schema=true).
-
-	private esc(s: string): string {
-		return s.replace(/'/g, "''");
-	}
+	// getColumns uses CommandGetTables with include_schema=true, parsing the
+	// Arrow Schema IPC blob — this is database-agnostic (no SQL).
 
 	async getCatalogs(): Promise<string[]> {
 		const rows = await this.executeCommand(this.getCatalogsType, {}, 'CommandGetCatalogs');
@@ -366,14 +362,30 @@ export class QodClient {
 		}));
 	}
 
-	async getColumns(_catalog: string, schema: string, table: string): Promise<CatalogRow[]> {
-		const rows = await this.query(
-			`SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = '${this.esc(schema)}' AND table_name = '${this.esc(table)}' ORDER BY ordinal_position`,
+	async getColumns(catalog: string, schema: string, table: string): Promise<CatalogRow[]> {
+		// Use CommandGetTables with include_schema=true and filter to the
+		// specific table.  The table_schema column is an Arrow Schema IPC blob
+		// that can be parsed into a proper Arrow Schema to list its fields.
+		const rows = await this.executeCommand(
+			this.getTablesType,
+			{ catalog, dbSchemaFilterPattern: schema, tableNameFilterPattern: table, includeSchema: true },
+			'CommandGetTables',
 		);
-		return rows.map((r) => ({
-			name: String(r.column_name || ''),
-			dataType: String(r.data_type || ''),
-			nullable: r.is_nullable === true || r.is_nullable === 'YES',
+
+		const target = rows.find((r) => String(r.table_name || '') === table);
+		if (!target) return [];
+
+		const schemaBytes: Buffer | undefined = target.table_schema as Buffer | undefined;
+		if (!schemaBytes || schemaBytes.length === 0) return [];
+
+		// Parse the Arrow Schema IPC blob.
+		// `tableFromIPC` with a Schema-only payload returns a Table with 0 rows
+		// but a fully populated schema — we only need the schema portion.
+		const arrowTable = tableFromIPC(schemaBytes);
+		return arrowTable.schema.fields.map((field) => ({
+			name: field.name,
+			dataType: String(field.type),
+			nullable: field.nullable,
 		}));
 	}
 
