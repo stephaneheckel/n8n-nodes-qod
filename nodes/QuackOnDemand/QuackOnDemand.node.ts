@@ -164,7 +164,7 @@ export class QuackOnDemand implements INodeType {
 				default: 'table',
 			},
 
-			// ── TABLE operations ──────────────────────────────────────
+			// ── Operation (right after Resource, one variant per resource) ──
 			{
 				displayName: 'Operation',
 				name: 'operation',
@@ -172,107 +172,13 @@ export class QuackOnDemand implements INodeType {
 				noDataExpression: true,
 				displayOptions: { show: { resource: ['table'] } },
 				options: [
-					{
-						name: 'Read',
-						value: 'read',
-						description: 'SELECT rows from a table (auto-generated SQL)',
-						action: 'Read rows from a table',
-					},
-					{
-						name: 'Insert',
-						value: 'insert',
-						description: 'INSERT rows into a table (WIP — coming soon)',
-						action: 'Insert rows into a table',
-					},
-					{
-						name: 'Update',
-						value: 'update',
-						description: 'UPDATE rows in a table (WIP — coming soon)',
-						action: 'Update rows in a table',
-					},
-					{
-						name: 'Delete',
-						value: 'delete',
-						description: 'DELETE rows from a table (WIP — coming soon)',
-						action: 'Delete rows from a table',
-					},
+					{ name: 'Read', value: 'read', description: 'SELECT rows (auto-generated SQL)', action: 'Read rows from a table' },
+					{ name: 'Insert', value: 'insert', description: 'INSERT rows (WIP)', action: 'Insert rows into a table' },
+					{ name: 'Update', value: 'update', description: 'UPDATE rows (WIP)', action: 'Update rows in a table' },
+					{ name: 'Delete', value: 'delete', description: 'DELETE rows (WIP)', action: 'Delete rows from a table' },
 				],
 				default: 'read',
 			},
-			{
-				displayName: 'Tenant',
-				name: 'tenant',
-				type: 'options',
-				displayOptions: { show: { resource: ['table', 'catalog'] } },
-				typeOptions: {
-					loadOptionsMethod: 'getTenants',
-				},
-				default: '',
-				description: 'The tenant (database) to query',
-			},
-			{
-				displayName: 'Schema',
-				name: 'schema',
-				type: 'options',
-				displayOptions: { show: { resource: ['table', 'catalog'] } },
-				typeOptions: {
-					loadOptionsMethod: 'getSchemas',
-					loadOptionsDependsOn: ['tenant'],
-				},
-				default: '',
-				description: 'The schema to browse',
-			},
-			{
-				displayName: 'Table',
-				name: 'table',
-				type: 'options',
-				displayOptions: { show: { resource: ['table', 'catalog'] } },
-				typeOptions: {
-					loadOptionsMethod: 'getTables',
-					loadOptionsDependsOn: ['tenant', 'schema'],
-				},
-				default: '',
-				description: 'The table to query',
-			},
-			{
-				displayName: 'Columns',
-				name: 'columns',
-				type: 'multiOptions',
-				displayOptions: {
-					show: { resource: ['table'], operation: ['read'] },
-				},
-				typeOptions: {
-					loadOptionsMethod: 'getColumns',
-					loadOptionsDependsOn: ['tenant', 'schema', 'table'],
-				},
-				default: [],
-				description: 'Columns to include in the SELECT. Leave empty for all columns (SELECT *).',
-			},
-			{
-				displayName: 'Filter (WHERE)',
-				name: 'filter',
-				type: 'string',
-				displayOptions: {
-					show: { resource: ['table'], operation: ['read'] },
-				},
-				default: '',
-				placeholder: "c_mktsegment = 'AUTOMOBILE'",
-				description:
-					'Optional WHERE clause (without the keyword "WHERE"). Example: c_acctbal > 0 AND c_name LIKE \'A%\'. Raw SQL — do not pass untrusted user input.',
-			},
-			{
-				displayName: 'Limit',
-				name: 'limit',
-				type: 'number',
-				displayOptions: {
-					show: { resource: ['table'], operation: ['read'] },
-				},
-				typeOptions: { minValue: 0, maxValue: 100000 },
-				default: 100,
-				description: 'Maximum number of rows to return. Set to 0 for no limit.',
-			},
-
-			// ── QUERY operations ──────────────────────────────────────
 			{
 				displayName: 'Operation',
 				name: 'operation',
@@ -280,21 +186,116 @@ export class QuackOnDemand implements INodeType {
 				noDataExpression: true,
 				displayOptions: { show: { resource: ['query'] } },
 				options: [
-					{
-						name: 'Execute',
-						value: 'execute',
-						description: 'Run a SELECT / RETURNING statement and return the result rows',
-						action: 'Execute a SQL query',
-					},
-					{
-						name: 'Execute Update',
-						value: 'executeUpdate',
-						description: 'Run an INSERT, UPDATE, DELETE, or DDL statement',
-						action: 'Execute a SQL update',
-					},
+					{ name: 'Execute', value: 'execute', description: 'Run a SELECT / RETURNING statement', action: 'Execute a SQL query' },
+					{ name: 'Execute Update', value: 'executeUpdate', description: 'Run INSERT/UPDATE/DELETE/DDL', action: 'Execute a SQL update' },
 				],
 				default: 'execute',
 			},
+			{
+				displayName: 'Operation',
+				name: 'operation',
+				type: 'options',
+				noDataExpression: true,
+				displayOptions: { show: { resource: ['catalog'] } },
+				options: [
+					{ name: 'List Databases', value: 'listDatabases', description: 'List all available databases (tenants)', action: 'List databases' },
+					{ name: 'List Schemas', value: 'listSchemas', description: 'List all schemas in the selected tenant', action: 'List schemas' },
+					{ name: 'List Tables', value: 'listTables', description: 'List all tables and views in the selected schema', action: 'List tables' },
+					{ name: 'Describe Table', value: 'describeTable', description: 'List columns (name, type, nullable)', action: 'Describe a table' },
+				],
+				default: 'listDatabases',
+			},
+
+			// ── Tenant ────────────────────────────────────────────────
+			{
+				displayName: 'Tenant',
+				name: 'tenant',
+				type: 'options',
+				displayOptions: { show: { resource: ['table'] } },
+				typeOptions: { loadOptionsMethod: 'getTenants' },
+				default: '',
+				description: 'The tenant (database) to query',
+			},
+			{
+				displayName: 'Tenant',
+				name: 'tenant',
+				type: 'options',
+				displayOptions: { show: { resource: ['catalog'], operation: ['listSchemas', 'listTables', 'describeTable'] } },
+				typeOptions: { loadOptionsMethod: 'getTenants' },
+				default: '',
+				description: 'The tenant to browse',
+			},
+
+			// ── Schema ────────────────────────────────────────────────
+			{
+				displayName: 'Schema',
+				name: 'schema',
+				type: 'options',
+				displayOptions: { show: { resource: ['table'] } },
+				typeOptions: { loadOptionsMethod: 'getSchemas', loadOptionsDependsOn: ['tenant'] },
+				default: '',
+				description: 'The schema to query',
+			},
+			{
+				displayName: 'Schema',
+				name: 'schema',
+				type: 'options',
+				displayOptions: { show: { resource: ['catalog'], operation: ['listTables', 'describeTable'] } },
+				typeOptions: { loadOptionsMethod: 'getSchemas', loadOptionsDependsOn: ['tenant'] },
+				default: '',
+				description: 'The schema to browse',
+			},
+
+			// ── Table ─────────────────────────────────────────────────
+			{
+				displayName: 'Table',
+				name: 'table',
+				type: 'options',
+				displayOptions: { show: { resource: ['table'] } },
+				typeOptions: { loadOptionsMethod: 'getTables', loadOptionsDependsOn: ['tenant', 'schema'] },
+				default: '',
+				description: 'The table to query',
+			},
+			{
+				displayName: 'Table',
+				name: 'table',
+				type: 'options',
+				displayOptions: { show: { resource: ['catalog'], operation: ['describeTable'] } },
+				typeOptions: { loadOptionsMethod: 'getTables', loadOptionsDependsOn: ['tenant', 'schema'] },
+				default: '',
+				description: 'The table to describe',
+			},
+
+			// ── TABLE-specific fields (Read) ──────────────────────────
+			{
+				displayName: 'Columns',
+				name: 'columns',
+				type: 'multiOptions',
+				displayOptions: { show: { resource: ['table'], operation: ['read'] } },
+				typeOptions: { loadOptionsMethod: 'getColumns', loadOptionsDependsOn: ['tenant', 'schema', 'table'] },
+				default: [],
+				description: 'Columns to SELECT. Empty = all columns (SELECT *).',
+			},
+			{
+				displayName: 'Filter (WHERE)',
+				name: 'filter',
+				type: 'string',
+				displayOptions: { show: { resource: ['table'], operation: ['read'] } },
+				default: '',
+				placeholder: "c_mktsegment = 'AUTOMOBILE'",
+				description: 'Optional WHERE clause (without the keyword "WHERE"). Raw SQL — do not pass untrusted user input.',
+			},
+			{
+				displayName: 'Limit',
+				name: 'limit',
+				type: 'number',
+				displayOptions: { show: { resource: ['table'], operation: ['read'] } },
+				typeOptions: { minValue: 0, maxValue: 100000 },
+				default: 100,
+				description: 'Max rows to return. 0 = no limit.',
+			},
+
+			// ── QUERY-specific fields ─────────────────────────────────
 			{
 				displayName: 'Query',
 				name: 'query',
@@ -305,42 +306,6 @@ export class QuackOnDemand implements INodeType {
 				placeholder: 'SELECT * FROM tpch1.customer LIMIT 100',
 				required: true,
 				description: 'The SQL statement to run. Runs once per input item.',
-			},
-
-			// ── CATALOG operations ────────────────────────────────────
-			{
-				displayName: 'Operation',
-				name: 'operation',
-				type: 'options',
-				noDataExpression: true,
-				displayOptions: { show: { resource: ['catalog'] } },
-				options: [
-					{
-						name: 'List Databases',
-						value: 'listDatabases',
-						description: 'List all available databases (tenants)',
-						action: 'List databases',
-					},
-					{
-						name: 'List Schemas',
-						value: 'listSchemas',
-						description: 'List all schemas in the selected tenant',
-						action: 'List schemas',
-					},
-					{
-						name: 'List Tables',
-						value: 'listTables',
-						description: 'List all tables and views in the selected schema',
-						action: 'List tables',
-					},
-					{
-						name: 'Describe Table',
-						value: 'describeTable',
-						description: 'List columns (name, type, nullable) for the selected table',
-						action: 'Describe a table',
-					},
-				],
-				default: 'listDatabases',
 			},
 		],
 	};
