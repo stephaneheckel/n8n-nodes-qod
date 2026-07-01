@@ -164,9 +164,9 @@ async function handleTable(
 			return `'${String(val).replace(/'/g, "''")}'`;
 		});
 
-		const sql = `INSERT INTO ${schema}.${tableName} (${cols.join(', ')}) VALUES (${vals.join(', ')})`;
-		await client.query(sql);  // DuckDB handles DML via query() — safer than update()
-		return [{ query: sql, rows_affected: 1 }];
+		const sql = `INSERT INTO ${schema}.${tableName} (${cols.join(', ')}) VALUES (${vals.join(', ')}) RETURNING *`;
+		const rows = await client.query(sql);
+		return [{ query: sql, rows_affected: rows.length }];
 	}
 
 	if (operation === 'update') {
@@ -199,9 +199,9 @@ async function handleTable(
 			return `${col} = '${String(val).replace(/'/g, "''")}'`;
 		});
 
-		const sql = `UPDATE ${schema}.${tableName} SET ${sets.join(', ')} WHERE ${filter.trim()}`;
-		await client.query(sql);  // DuckDB handles DML via query()
-		return [{ query: sql, rows_affected: 1 }];
+		const sql = `UPDATE ${schema}.${tableName} SET ${sets.join(', ')} WHERE ${filter.trim()} RETURNING *`;
+		const rows = await client.query(sql);
+		return [{ query: sql, rows_affected: rows.length }];
 	}
 
 	if (operation === 'delete') {
@@ -210,9 +210,9 @@ async function handleTable(
 			throw new NodeOperationError(exec.getNode(), 'A WHERE clause is required for DELETE.', { itemIndex });
 		}
 
-		const sql = `DELETE FROM ${schema}.${tableName} WHERE ${filter.trim()}`;
-		await client.query(sql);  // DuckDB handles DML via query()
-		return [{ query: sql, rows_affected: 1 }];
+		const sql = `DELETE FROM ${schema}.${tableName} WHERE ${filter.trim()} RETURNING *`;
+		const rows = await client.query(sql);
+		return [{ query: sql, rows_affected: rows.length }];
 	}
 
 	throw new NodeOperationError(
