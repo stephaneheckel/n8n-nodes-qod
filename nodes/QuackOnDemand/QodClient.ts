@@ -312,9 +312,14 @@ export class QodClient {
 					}
 					bearerToken = raw.toString('utf8');
 				} catch (e: any) {
-					// Server doesn't support Handshake (code 12 = UNIMPLEMENTED)
-					// — fall back to HTTP Basic below.
-					console.warn('[QodClient] Handshake failed, falling back to Basic:', e.message);
+					// Only fall back to Basic for UNIMPLEMENTED (code 12).
+					// For other errors, re-throw so we can see them.
+					if (e.code === 12) {
+						console.warn('[QodClient] Handshake not supported, using Basic auth');
+					} else {
+						console.warn('[QodClient] Handshake error:', e.code, e.details || e.message);
+						throw e;
+					}
 				}
 		}
 
