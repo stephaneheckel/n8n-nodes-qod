@@ -299,16 +299,19 @@ export class QodClient {
 				const payload = Buffer.from(`${cfg.user}:${cfg.password}`);
 
 				const resp: any = await new Promise((resolve, reject) => {
-					client.Handshake(
-						{ payload, protocolVersion: 0 },
-						md,
-						(err, r) => (err ? reject(err) : resolve(r)),
-					);
-				});
-				const rx = root.lookupType('arrow.flight.protocol.HandshakeResponse');
-				const decoded = rx.decode(resp.payload || Buffer.alloc(0));
-				bearerToken = Buffer.from((decoded as any).payload || '').toString('utf8');
-			} catch {
+						client.Handshake(
+							{ payload, protocolVersion: 0 },
+							md,
+							(err, r) => (err ? reject(err) : resolve(r)),
+						);
+					});
+					// The response payload may be the raw token, or a wrapped HandshakeResponse
+					const raw = (resp as any).payload;
+					if (!raw || raw.length === 0) {
+						throw new Error('Empty handshake response');
+					}
+					bearerToken = raw.toString('utf8');
+				} catch {
 				// Server doesn't support Handshake — use HTTP Basic below
 			}
 		}
