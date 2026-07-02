@@ -23,6 +23,7 @@ syntax = "proto3";
 package arrow.flight.protocol;
 
 service FlightService {
+  rpc Handshake(HandshakeRequest) returns (HandshakeResponse) {}
   rpc GetFlightInfo(FlightDescriptor) returns (FlightInfo) {}
   rpc DoGet(Ticket) returns (stream FlightData) {}
   rpc DoPut(stream FlightData) returns (stream PutResult) {}
@@ -62,6 +63,16 @@ message FlightData {
 
 message PutResult {
   bytes app_metadata = 1;
+}
+
+message HandshakeRequest {
+  bytes payload = 1;
+  uint64 protocol_version = 2;
+}
+
+message HandshakeResponse {
+  bytes payload = 1;
+  uint64 protocol_version = 2;
 }
 `;
 
@@ -133,6 +144,11 @@ export interface CatalogRow {
 }
 
 interface FlightClient extends grpc.Client {
+	Handshake(
+		req: unknown,
+		metadata: grpc.Metadata,
+		cb: (err: grpc.ServiceError | null, resp: any) => void,
+	): void;
 	GetFlightInfo(
 		descriptor: unknown,
 		metadata: grpc.Metadata,
@@ -208,6 +224,10 @@ export class QodClient {
 	private readonly getTablesType: protobuf.Type;
 	private readonly commandIngestType: protobuf.Type;
 
+	// Bearer token from Flight handshake (GizmoSQL-style auth).
+	// Undefined = use HTTP Basic (QoD, sqlflite).
+	private readonly bearerToken?: string;
+
 	private constructor(
 		private readonly client: FlightClient,
 		private readonly cfg: QodConfig,
@@ -220,7 +240,9 @@ export class QodClient {
 			getDbSchemas: protobuf.Type;
 			getTables: protobuf.Type;
 		},
+		bearerToken?: string,
 	) {
+		this.bearerToken = bearerToken;
 		this.commandQueryType = cmdTypes.commandQuery;
 		this.commandUpdateType = cmdTypes.commandUpdate;
 		this.commandIngestType = cmdTypes.commandIngest;
@@ -264,7 +286,34 @@ export class QodClient {
 			getDbSchemas: root.lookupType('arrow.flight.protocol.sql.CommandGetDbSchemas'),
 			getTables: root.lookupType('arrow.flight.protocol.sql.CommandGetTables'),
 		};
-		return new QodClient(client, cfg, anyType, cmdTypes);
+
+		// Try Flight handshake for Bearer token auth (GizmoSQL).
+		// Fall back to HTTP Basic silently if the server doesn't implement Handshake.
+		let bearerToken: string | undefined;
+		if (cfg.user || cfg.password) {
+			try {
+				const basic = Buffer.from(`${cfg.user}:${cfg.password}`).toString('base64');
+				const md = new grpc.Metadata();
+				md.set('authorization', `Basic ${basic}`);
+				// GizmoSQL-style: Basic auth header + username:password in payload
+				const payload = Buffer.from(`${cfg.user}:${cfg.password}`);
+
+				const resp: any = await new Promise((resolve, reject) => {
+					client.Handshake(
+						{ payload, protocolVersion: 0 },
+						md,
+						(err, r) => (err ? reject(err) : resolve(r)),
+					);
+				});
+				const rx = root.lookupType('arrow.flight.protocol.HandshakeResponse');
+				const decoded = rx.decode(resp.payload || Buffer.alloc(0));
+				bearerToken = Buffer.from((decoded as any).payload || '').toString('utf8');
+			} catch {
+				// Server doesn't support Handshake — use HTTP Basic below
+			}
+		}
+
+		return new QodClient(client, cfg, anyType, cmdTypes, bearerToken);
 	}
 
 	private static async credentials(cfg: QodConfig): Promise<grpc.ChannelCredentials> {
@@ -283,7 +332,9 @@ export class QodClient {
 		const md = new grpc.Metadata();
 		md.set('tenant', this.cfg.tenant);
 		md.set('pool', this.cfg.pool);
-		if (this.cfg.user || this.cfg.password) {
+		if (this.bearerToken) {
+			md.set('authorization', `Bearer ${this.bearerToken}`);
+		} else if (this.cfg.user || this.cfg.password) {
 			const basic = Buffer.from(`${this.cfg.user}:${this.cfg.password}`).toString('base64');
 			md.set('authorization', `Basic ${basic}`);
 		}
