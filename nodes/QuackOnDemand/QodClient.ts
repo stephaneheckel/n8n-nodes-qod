@@ -283,8 +283,10 @@ export class QodClient {
 		const md = new grpc.Metadata();
 		md.set('tenant', this.cfg.tenant);
 		md.set('pool', this.cfg.pool);
-		const basic = Buffer.from(`${this.cfg.user}:${this.cfg.password}`).toString('base64');
-		md.set('authorization', `Basic ${basic}`);
+		if (this.cfg.user || this.cfg.password) {
+			const basic = Buffer.from(`${this.cfg.user}:${this.cfg.password}`).toString('base64');
+			md.set('authorization', `Basic ${basic}`);
+		}
 		if (this.cfg.superuser) md.set('superuser', 'true');
 		return md;
 	}
