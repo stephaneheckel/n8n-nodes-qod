@@ -308,9 +308,12 @@ export class QodClient {
 					// The response payload may be the raw token, or a wrapped HandshakeResponse
 					const raw = (resp as any).payload;
 					if (!raw || raw.length === 0) {
+						console.warn('[QodClient] Handshake OK but empty payload, keys:', Object.keys(resp as any));
 						throw new Error('Empty handshake response');
 					}
-					bearerToken = raw.toString('utf8');
+					const token = raw.toString('utf8');
+					console.warn('[QodClient] Handshake OK, token length:', token.length);
+					bearerToken = token;
 				} catch (e: any) {
 					// Only fall back to Basic for UNIMPLEMENTED (code 12).
 					// For other errors, re-throw so we can see them.
