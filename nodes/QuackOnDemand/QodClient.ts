@@ -311,9 +311,11 @@ export class QodClient {
 						throw new Error('Empty handshake response');
 					}
 					bearerToken = raw.toString('utf8');
-				} catch {
-				// Server doesn't support Handshake — use HTTP Basic below
-			}
+				} catch (e: any) {
+					// Server doesn't support Handshake (code 12 = UNIMPLEMENTED)
+					// — fall back to HTTP Basic below.
+					console.warn('[QodClient] Handshake failed, falling back to Basic:', e.message);
+				}
 		}
 
 		return new QodClient(client, cfg, anyType, cmdTypes, bearerToken);
