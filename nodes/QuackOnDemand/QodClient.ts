@@ -366,8 +366,8 @@ export class QodClient {
 		// Serialize to Arrow IPC stream format (includes schema + record batches)
 		const ipcBuffer = Buffer.from(tableToIPC(arrowTable, 'stream'));
 
-		// Build CommandStatementUpdate with the INSERT SQL
-		const cmd = this.buildCommand(this.commandUpdateType, { query: sql }, 'CommandStatementUpdate');
+		// Build CommandStatementQuery with the INSERT SQL (QoD only supports Query)
+		const cmd = this.buildCommand(this.commandQueryType, { query: sql }, 'CommandStatementQuery');
 
 		const info = await new Promise<any>((resolve, reject) => {
 			this.client.GetFlightInfo(
