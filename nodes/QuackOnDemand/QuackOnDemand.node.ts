@@ -325,7 +325,6 @@ export class QuackOnDemand implements INodeType {
 					{ name: 'Insert', value: 'insert', description: 'INSERT rows (values from input JSON)', action: 'Insert rows into a table' },
 					{ name: 'Update', value: 'update', description: 'UPDATE rows (values from input JSON)', action: 'Update rows in a table' },
 					{ name: 'Delete', value: 'delete', description: 'DELETE rows by WHERE clause', action: 'Delete rows from a table' },
-					{ name: 'Bulk Insert', value: 'bulkInsert', description: 'INSERT rows via Arrow stream (fast for large datasets)', action: 'Bulk insert rows via Arrow' },
 				],
 				default: 'read',
 			},
@@ -450,7 +449,7 @@ export class QuackOnDemand implements INodeType {
 					displayName: 'Columns',
 					name: 'columns',
 					type: 'multiOptions',
-					displayOptions: { show: { resource: ['table'], operation: ['insert', 'update', 'bulkInsert'] } },
+					displayOptions: { show: { resource: ['table'], operation: ['insert', 'update'] } },
 					typeOptions: { loadOptionsMethod: 'getColumns', loadOptionsDependsOn: ['tenant', 'schema', 'table'] },
 					default: [],
 					description: 'Columns to insert. Empty = use all keys from input JSON.',
@@ -549,27 +548,6 @@ export class QuackOnDemand implements INodeType {
 			if (operation === 'insert' && items.length > 1) {
 				try {
 					const rows = await handleTableBatchInsert(this, client, items);
-					for (const row of rows) {
-						out.push({ json: row as IDataObject, pairedItem: { item: 0 } });
-					}
-				} catch (error) {
-					if (this.continueOnFail()) {
-						out.push({
-							json: { error: (error as Error).message },
-							error: error as NodeOperationError,
-							pairedItem: { item: 0 },
-						} as INodeExecutionData);
-					} else {
-						throw new NodeOperationError(this.getNode(), error as Error, { itemIndex: 0 });
-					}
-				}
-				client.close();
-				return [out];
-			}
-			// Bulk Insert: always processes all items in one Arrow stream
-					if (operation === 'bulkInsert') {
-						try {
-							const rows = await handleTableBatchInsert(this, client, items);
 					for (const row of rows) {
 						out.push({ json: row as IDataObject, pairedItem: { item: 0 } });
 					}
