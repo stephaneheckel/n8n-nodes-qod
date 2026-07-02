@@ -25,34 +25,20 @@ function credentialsToConfig(c: Record<string, unknown>): QodConfig {
 	};
 }
 
-// Connection cache for loadOptions — avoids TLS handshake + gRPC connect
-// on every cascading dropdown call (tenant → schema → table → columns).
-// Cache keyed by credentials fingerprint, TTL 10s.
-const connectionCache = new Map<string, { client: QodClient; expires: number }>();
-const CACHE_TTL_MS = 10_000;
-
+// Shared helper: open a connection, run a catalog call, return formatted
+// options. Used by all loadOptions methods.
 async function withClient<T>(
 	ctx: ILoadOptionsFunctions,
 	fn: (client: QodClient) => Promise<T>,
 ): Promise<T> {
 	const creds = await ctx.getCredentials('quackOnDemandApi');
 	const cfg = credentialsToConfig(creds);
-	const key = `${cfg.host}:${cfg.port}:${cfg.tenant}:${cfg.user}`;
-
-	const cached = connectionCache.get(key);
-	if (cached && cached.expires > Date.now()) {
-		return fn(cached.client);
-	}
-
-	// Clean expired entries while we're here
-	for (const kv of Array.from(connectionCache)) {
-		const [k, v] = kv;
-		if (v.expires <= Date.now()) connectionCache.delete(k);
-	}
-
 	const client = await QodClient.connect(cfg);
-	connectionCache.set(key, { client, expires: Date.now() + CACHE_TTL_MS });
-	return fn(client);
+	try {
+		return await fn(client);
+	} finally {
+		client.close();
+	}
 }
 
 // Parse type:'json' values — n8n returns a string for static JSON,
