@@ -27,18 +27,41 @@ function credentialsToConfig(c: Record<string, unknown>): QodConfig {
 
 // Shared helper: open a connection, run a catalog call, return formatted
 // options. Used by all loadOptions methods.
+//
+// DuckDB FlightSQL servers require connection reuse — creating a new
+// connection for each dropdown call causes "closed pending query" errors.
+// We cache connections per credentials fingerprint, TTL 30s.
+
+const connectionCache = new Map<string, { client: QodClient; expires: number }>();
+const CACHE_TTL_MS = 30_000;
+
 async function withClient<T>(
 	ctx: ILoadOptionsFunctions,
 	fn: (client: QodClient) => Promise<T>,
 ): Promise<T> {
 	const creds = await ctx.getCredentials('quackOnDemandApi');
 	const cfg = credentialsToConfig(creds);
-	const client = await QodClient.connect(cfg);
-	try {
-		return await fn(client);
-	} finally {
-		client.close();
+	const key = `${cfg.host}:${cfg.port}:${cfg.user}`;
+
+	// Purge expired entries
+	for (const kv of Array.from(connectionCache)) {
+		const [k, v] = kv;
+		if (v.expires <= Date.now()) {
+			v.client.close();
+			connectionCache.delete(k);
+		}
 	}
+
+	let entry = connectionCache.get(key);
+	if (!entry) {
+		const client = await QodClient.connect(cfg);
+		entry = { client, expires: Date.now() + CACHE_TTL_MS };
+		connectionCache.set(key, entry);
+	} else {
+		entry.expires = Date.now() + CACHE_TTL_MS; // bump TTL
+	}
+
+	return fn(entry.client);
 }
 
 // Parse type:'json' values — n8n returns a string for static JSON,
