@@ -45,7 +45,8 @@ async function withClient<T>(
 	}
 
 	// Clean expired entries while we're here
-	for (const [k, v] of connectionCache) {
+	for (const kv of Array.from(connectionCache)) {
+		const [k, v] = kv;
 		if (v.expires <= Date.now()) connectionCache.delete(k);
 	}
 
@@ -181,6 +182,41 @@ async function handleTable(
 		const sql = `INSERT INTO ${schema}.${tableName} (${cols.join(', ')}) VALUES (${vals.join(', ')})`;
 		await client.query(sql);
 		return [{ query: sql, rows_affected: 1 }];
+	}
+
+	if (operation === 'bulkInsert') {
+		// Collect all input items and send via Arrow DoPut stream.
+		const items = exec.getInputData();
+		const selectedColumns = exec.getNodeParameter('columns', itemIndex, []) as string[];
+		const allRows: Array<Record<string, unknown>> = [];
+
+		for (let j = 0; j < items.length; j++) {
+			const inputJson = items[j]?.json || {};
+			const rawValues = exec.getNodeParameter('valuesJson', j, {}) as unknown;
+			const valuesObj = parseValuesJson(rawValues);
+			const data: Record<string, unknown> = { ...inputJson, ...(Object.keys(valuesObj).length > 0 ? valuesObj : {}) };
+			if (Object.keys(data).length > 0) allRows.push(data);
+		}
+
+		if (allRows.length === 0) {
+			throw new NodeOperationError(exec.getNode(), 'No data to bulk insert.', { itemIndex: 0 });
+		}
+
+		// Build column list from union of all keys, filtered by user selection
+		const allKeys = new Set<string>();
+		for (const row of allRows) Object.keys(row).forEach((k) => allKeys.add(k));
+		const cols = selectedColumns.length > 0 ? selectedColumns : Array.from(allKeys);
+
+		// Filter rows to only the selected columns
+		const trimmed = allRows.map((row) => {
+			const out: Record<string, unknown> = {};
+			for (const col of cols) out[col] = row[col] ?? null;
+			return out;
+		});
+
+		const sql = `INSERT INTO ${schema}.${tableName} (${cols.join(', ')})`;
+		await client.ingest(sql, trimmed);
+		return [{ success: true, message: `Ingested ${allRows.length} rows` }];
 	}
 
 	if (operation === 'update') {
@@ -322,6 +358,7 @@ export class QuackOnDemand implements INodeType {
 					{ name: 'Insert', value: 'insert', description: 'INSERT rows (values from input JSON)', action: 'Insert rows into a table' },
 					{ name: 'Update', value: 'update', description: 'UPDATE rows (values from input JSON)', action: 'Update rows in a table' },
 					{ name: 'Delete', value: 'delete', description: 'DELETE rows by WHERE clause', action: 'Delete rows from a table' },
+					{ name: 'Bulk Insert', value: 'bulkInsert', description: 'INSERT rows via Arrow stream (fast for large datasets)', action: 'Bulk insert rows via Arrow' },
 				],
 				default: 'read',
 			},
@@ -441,15 +478,15 @@ export class QuackOnDemand implements INodeType {
 				description: 'Max rows to return. 0 = no limit.',
 			},
 
-			// ── TABLE-specific fields (Insert / Update) ───────────────
+			// ── TABLE-specific fields (Insert / Update / Bulk Insert) ──
 				{
 					displayName: 'Columns',
 					name: 'columns',
 					type: 'multiOptions',
-					displayOptions: { show: { resource: ['table'], operation: ['insert', 'update'] } },
+					displayOptions: { show: { resource: ['table'], operation: ['insert', 'update', 'bulkInsert'] } },
 					typeOptions: { loadOptionsMethod: 'getColumns', loadOptionsDependsOn: ['tenant', 'schema', 'table'] },
 					default: [],
-					description: 'Columns to insert/update. Empty = use all keys from Values or input JSON.',
+					description: 'Columns to insert. Empty = use all keys from input JSON.',
 				},
 				{
 					displayName: 'Values (JSON)',
@@ -545,6 +582,27 @@ export class QuackOnDemand implements INodeType {
 			if (operation === 'insert' && items.length > 1) {
 				try {
 					const rows = await handleTableBatchInsert(this, client, items);
+					for (const row of rows) {
+						out.push({ json: row as IDataObject, pairedItem: { item: 0 } });
+					}
+				} catch (error) {
+					if (this.continueOnFail()) {
+						out.push({
+							json: { error: (error as Error).message },
+							error: error as NodeOperationError,
+							pairedItem: { item: 0 },
+						} as INodeExecutionData);
+					} else {
+						throw new NodeOperationError(this.getNode(), error as Error, { itemIndex: 0 });
+					}
+				}
+				client.close();
+				return [out];
+			}
+			// Bulk Insert: always processes all items in one Arrow stream
+			if (operation === 'bulkInsert') {
+				try {
+					const rows = await handleTable(this, client, 0);
 					for (const row of rows) {
 						out.push({ json: row as IDataObject, pairedItem: { item: 0 } });
 					}

@@ -12,7 +12,7 @@ import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import * as protobuf from 'protobufjs';
 import * as tls from 'node:tls';
-import { tableFromIPC, Table } from 'apache-arrow';
+import { tableFromIPC, tableFromJSON, tableToIPC, Table } from 'apache-arrow';
 
 const FLIGHTSQL_NAMESPACE = 'type.googleapis.com/arrow.flight.protocol.sql';
 
@@ -25,6 +25,7 @@ package arrow.flight.protocol;
 service FlightService {
   rpc GetFlightInfo(FlightDescriptor) returns (FlightInfo) {}
   rpc DoGet(Ticket) returns (stream FlightData) {}
+  rpc DoPut(stream FlightData) returns (stream PutResult) {}
 }
 
 message FlightDescriptor {
@@ -58,6 +59,10 @@ message FlightData {
   bytes app_metadata = 3;
   bytes data_body = 1000;
 }
+
+message PutResult {
+  bytes app_metadata = 1;
+}
 `;
 
 // Flight SQL (FlightSql.proto) messages. Any is declared as a plain message
@@ -82,6 +87,12 @@ message CommandStatementQuery {
 message CommandStatementUpdate {
   string query = 1;
   bytes transaction_id = 2;
+}
+
+// --- bulk ingestion ---
+
+message CommandStatementIngest {
+  bytes transaction_id = 1;
 }
 
 // --- catalog browsing ---
@@ -128,6 +139,7 @@ interface FlightClient extends grpc.Client {
 		cb: (err: grpc.ServiceError | null, info: any) => void,
 	): void;
 	DoGet(ticket: unknown, metadata: grpc.Metadata): grpc.ClientReadableStream<any>;
+	DoPut(metadata: grpc.Metadata): grpc.ClientDuplexStream<any, any>;
 }
 
 function typeUrl(name: string): string {
@@ -194,6 +206,7 @@ export class QodClient {
 	private readonly getCatalogsType: protobuf.Type;
 	private readonly getDbSchemasType: protobuf.Type;
 	private readonly getTablesType: protobuf.Type;
+	private readonly commandIngestType: protobuf.Type;
 
 	private constructor(
 		private readonly client: FlightClient,
@@ -202,6 +215,7 @@ export class QodClient {
 		cmdTypes: {
 			commandQuery: protobuf.Type;
 			commandUpdate: protobuf.Type;
+			commandIngest: protobuf.Type;
 			getCatalogs: protobuf.Type;
 			getDbSchemas: protobuf.Type;
 			getTables: protobuf.Type;
@@ -209,6 +223,7 @@ export class QodClient {
 	) {
 		this.commandQueryType = cmdTypes.commandQuery;
 		this.commandUpdateType = cmdTypes.commandUpdate;
+		this.commandIngestType = cmdTypes.commandIngest;
 		this.getCatalogsType = cmdTypes.getCatalogs;
 		this.getDbSchemasType = cmdTypes.getDbSchemas;
 		this.getTablesType = cmdTypes.getTables;
@@ -244,6 +259,7 @@ export class QodClient {
 		const cmdTypes = {
 			commandQuery: root.lookupType('arrow.flight.protocol.sql.CommandStatementQuery'),
 			commandUpdate: root.lookupType('arrow.flight.protocol.sql.CommandStatementUpdate'),
+			commandIngest: root.lookupType('arrow.flight.protocol.sql.CommandStatementIngest'),
 			getCatalogs: root.lookupType('arrow.flight.protocol.sql.CommandGetCatalogs'),
 			getDbSchemas: root.lookupType('arrow.flight.protocol.sql.CommandGetDbSchemas'),
 			getTables: root.lookupType('arrow.flight.protocol.sql.CommandGetTables'),
@@ -337,6 +353,44 @@ export class QodClient {
 	// statements (e.g. INSERT … RETURNING) may produce rows.
 	async update(sql: string): Promise<Array<Record<string, unknown>>> {
 		return this.executeCommand(this.commandUpdateType, { query: sql }, 'CommandStatementUpdate');
+	}
+
+	// Bulk insert: convert JSON rows to Arrow, stream via DoPut.
+	// Faster than multi-VALUES INSERT for large datasets (>1K rows).
+	async ingest(sql: string, rows: Array<Record<string, unknown>>): Promise<void> {
+		if (rows.length === 0) return;
+
+		// Build Arrow table from the rows
+		const arrowTable = tableFromJSON(rows);
+
+		// Serialize to Arrow IPC stream format (includes schema + record batches)
+		const ipcBuffer = Buffer.from(tableToIPC(arrowTable, 'stream'));
+
+		// Get FlightInfo for the INSERT
+		const cmd = this.buildCommand(this.commandIngestType, {}, 'CommandStatementIngest');
+
+		const info = await new Promise<any>((resolve, reject) => {
+			this.client.GetFlightInfo(
+				{ type: 'CMD', cmd },
+				this.metadata(),
+				(err, resp) => (err ? reject(err) : resolve(resp)),
+			);
+		});
+
+		// DoPut to each endpoint — first message carries the descriptor,
+		// then the Arrow IPC data
+		for (const endpoint of info.endpoint || []) {
+			await new Promise<void>((resolve, reject) => {
+				const stream = this.client.DoPut(this.metadata());
+				stream.on('error', reject);
+				stream.on('end', resolve);
+				// Write the descriptor first
+				stream.write({ flight_descriptor: { type: 'CMD', cmd }, app_metadata: endpoint.ticket.ticket });
+				// Then the Arrow IPC stream
+				stream.write({ data_body: ipcBuffer });
+				stream.end();
+			});
+		}
 	}
 
 	// ── Catalog operations ───────────────────────────────────────────────
