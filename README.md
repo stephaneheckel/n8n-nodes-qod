@@ -41,7 +41,7 @@ Empty result sets produce `{ "success": true, "message": "…" }`.
 
 | Operation | Description | Fields shown |
 |-----------|-------------|--------------|
-| **List Tenants** | List available tenants (databases) | Tenant (shown but optional) |
+| **List Tenants** | List available tenants (databases) | — |
 | **List Schemas** | List schemas in a tenant | Tenant |
 | **List Tables** | List tables/views in a schema | Tenant → Schema |
 | **Describe Table** | List columns (name, type, nullable) | Tenant → Schema → Table |

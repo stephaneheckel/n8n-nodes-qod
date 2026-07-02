@@ -387,10 +387,10 @@ export class QuackOnDemand implements INodeType {
 				displayName: 'Tenant',
 				name: 'tenant',
 				type: 'options',
-				displayOptions: { show: { resource: ['catalog'] } },
-				typeOptions: { loadOptionsMethod: 'getTenants' },
-				default: '',
-				description: 'The tenant to browse',
+				displayOptions: { show: { resource: ['catalog'], operation: ['listSchemas', 'listTables', 'describeTable'] } },
+					typeOptions: { loadOptionsMethod: 'getTenants' },
+					default: '',
+					description: 'The tenant to browse',
 			},
 
 			// ── Schema ────────────────────────────────────────────────
