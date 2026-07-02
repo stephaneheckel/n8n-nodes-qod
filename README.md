@@ -41,9 +41,9 @@ Empty result sets produce `{ "success": true, "message": "…" }`.
 
 | Operation | Description | Fields shown |
 |-----------|-------------|--------------|
-| **List Tenants** | List available tenants (databases) | Tenant → Schema → Table (shown but optional) |
-| **List Schemas** | List schemas in a tenant | Tenant → Schema → Table (shown but optional) |
-| **List Tables** | List tables/views in a schema | Tenant → Schema → Table |
+| **List Tenants** | List available tenants (databases) | Tenant (shown but optional) |
+| **List Schemas** | List schemas in a tenant | Tenant |
+| **List Tables** | List tables/views in a schema | Tenant → Schema |
 | **Describe Table** | List columns (name, type, nullable) | Tenant → Schema → Table |
 
 All catalog operations use the native FlightSQL commands
