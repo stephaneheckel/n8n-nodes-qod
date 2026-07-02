@@ -138,6 +138,12 @@ The node is compatible with any FlightSQL server, not just Quack on Demand.
   not dispatched. Use `SELECT 1` via the Query resource instead.
 - **DuckLake tables do not support `RETURNING`.** The node uses a pre-flight
   `SELECT COUNT(*)` to report accurate `rows_affected` counts.
+- **Bulk Insert not yet available.** QoD's FlightSQL edge currently only
+  supports `CommandStatementQuery` and the catalog commands. `DoPut` (Arrow
+  streaming) and `CommandStatementIngest` are not supported by the edge,
+  so bulk ingestion via Arrow is not yet possible. The regular Insert operation
+  already batches multiple input items into a single multi-row `INSERT`
+  statement for good performance.
 - **TLS.** When _Verify TLS Certificate_ is off, the edge's self-signed
   certificate is fetched from the wire and pinned. For production, install a
   CA-signed certificate and enable verification.
