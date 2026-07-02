@@ -308,22 +308,18 @@ export class QodClient {
 					// The response payload may be the raw token, or a wrapped HandshakeResponse
 					const raw = (resp as any).payload;
 					if (!raw || raw.length === 0) {
-						console.warn('[QodClient] Handshake OK but empty payload, keys:', Object.keys(resp as any));
 						throw new Error('Empty handshake response');
 					}
-					const token = raw.toString('utf8');
-					console.warn('[QodClient] Handshake OK, token length:', token.length);
-					bearerToken = token;
-				} catch (e: any) {
+					bearerToken = raw.toString('utf8');
+					} catch (e: any) {
 					// Only fall back to Basic for UNIMPLEMENTED (code 12).
 					// For other errors, re-throw so we can see them.
 					if (e.code === 12) {
-						console.warn('[QodClient] Handshake not supported, using Basic auth');
+						// Handshake not supported — use HTTP Basic below.
 					} else {
-						console.warn('[QodClient] Handshake error:', e.code, e.details || e.message);
 						throw e;
 					}
-				}
+					}
 		}
 
 		return new QodClient(client, cfg, anyType, cmdTypes, bearerToken);
