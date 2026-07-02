@@ -32,8 +32,17 @@ function credentialsToConfig(c: Record<string, unknown>): QodConfig {
 // connection for each dropdown call causes "closed pending query" errors.
 // We cache connections per credentials fingerprint, TTL 30s.
 
-const connectionCache = new Map<string, { client: QodClient; expires: number }>();
+const connectionCache = new Map<string, { client: QodClient; expires: number; lock: Promise<void> }>();
 const CACHE_TTL_MS = 30_000;
+
+// Serialize calls on the same cached connection — DuckDB FlightSQL
+// crashes on concurrent DoGet/DoPut on a single gRPC channel.
+function withLock<T>(entry: { lock: Promise<void>; client: QodClient }, fn: (client: QodClient) => Promise<T>): Promise<T> {
+	const prev = entry.lock;
+	let resolve: () => void;
+	entry.lock = new Promise<void>((r) => { resolve = r; });
+	return prev.then(() => fn(entry.client).finally(() => resolve!()));
+}
 
 async function withClient<T>(
 	ctx: ILoadOptionsFunctions,
@@ -55,13 +64,13 @@ async function withClient<T>(
 	let entry = connectionCache.get(key);
 	if (!entry) {
 		const client = await QodClient.connect(cfg);
-		entry = { client, expires: Date.now() + CACHE_TTL_MS };
+		entry = { client, expires: Date.now() + CACHE_TTL_MS, lock: Promise.resolve() };
 		connectionCache.set(key, entry);
 	} else {
-		entry.expires = Date.now() + CACHE_TTL_MS; // bump TTL
+		entry.expires = Date.now() + CACHE_TTL_MS;
 	}
 
-	return fn(entry.client);
+	return withLock(entry, fn);
 }
 
 // Parse type:'json' values — n8n returns a string for static JSON,
