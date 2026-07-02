@@ -133,6 +133,7 @@ export interface QodConfig {
 	superuser: boolean;
 	tls: boolean;
 	tlsVerify: boolean;
+	timeoutMs?: number;  // gRPC deadline, default 30_000
 }
 
 export interface CatalogRow {
@@ -302,11 +303,14 @@ export class QodClient {
 				// GizmoSQL-style: Basic auth header + username:password in payload
 				const payload = Buffer.from(`${cfg.user}:${cfg.password}`);
 
-				const resp: any = await new Promise((resolve, reject) => {
+				const ts = cfg.timeoutMs ?? 30_000;
+					const resp: any = await new Promise((resolve, reject) => {
+						const timer = setTimeout(() => reject(new Error(
+							`Handshake timed out after ${ts}ms`)), ts);
 						client.Handshake(
 							{ payload, protocol_version: 0 },
 							md,
-							(err, r) => (err ? reject(err) : resolve(r)),
+							(err, r) => { clearTimeout(timer); err ? reject(err) : resolve(r); },
 						);
 					});
 					// The response payload may be the raw token, or a wrapped HandshakeResponse
@@ -362,6 +366,20 @@ export class QodClient {
 		return Buffer.from(any);
 	}
 
+	// Wrap a gRPC promise with a deadline.  If the server doesn't respond
+	// within `ms` the promise rejects with a descriptive timeout error.
+	private withTimeout<T>(ms: number, label: string, promise: Promise<T>): Promise<T> {
+		return new Promise<T>((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error(
+				`${label} timed out after ${ms}ms — server may be unreachable`,
+			)), ms);
+			promise.then(
+				(v) => { clearTimeout(timer); resolve(v); },
+				(e) => { clearTimeout(timer); reject(e); },
+			);
+		});
+	}
+
 	// Core RPC: encode a command, call GetFlightInfo + DoGet, decode the Arrow
 	// stream, and return the raw Arrow Table (with proper Buffer columns).
 	private async executeCommandRaw(
@@ -403,7 +421,9 @@ export class QodClient {
 		payload: Record<string, unknown>,
 		commandName: string,
 	): Promise<Array<Record<string, unknown>>> {
-		const table = await this.executeCommandRaw(messageType, payload, commandName);
+		const t = this.cfg.timeoutMs ?? 30_000;
+		const table = await this.withTimeout(t, commandName,
+			this.executeCommandRaw(messageType, payload, commandName));
 		return table.toArray().map((row) => rowToObject(row, table));
 	}
 
@@ -445,8 +465,9 @@ export class QodClient {
 
 		// DoPut to each endpoint — first message carries the descriptor,
 		// then the Arrow IPC data
+		const t = this.cfg.timeoutMs ?? 30_000;
 		for (const endpoint of info.endpoint || []) {
-			await new Promise<void>((resolve, reject) => {
+			await this.withTimeout(t, 'DoPut', new Promise<void>((resolve, reject) => {
 				const stream = this.client.DoPut(this.metadata());
 				stream.on('error', reject);
 				stream.on('end', resolve);
@@ -455,7 +476,7 @@ export class QodClient {
 				// Then the Arrow IPC stream
 				stream.write({ data_body: ipcBuffer });
 				stream.end();
-			});
+			}));
 		}
 	}
 
