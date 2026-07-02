@@ -249,7 +249,7 @@ async function handleCatalog(
 	switch (operation) {
 		case 'listDatabases': {
 			const catalogs = await client.getCatalogs();
-			return catalogs.map((name) => ({ database: name }));
+			return catalogs.map((name) => ({ tenant: name }));
 		}
 		case 'listSchemas': {
 			const tenant = exec.getNodeParameter('tenant', itemIndex) as string;
@@ -347,7 +347,7 @@ export class QuackOnDemand implements INodeType {
 				noDataExpression: true,
 				displayOptions: { show: { resource: ['catalog'] } },
 				options: [
-					{ name: 'List Databases', value: 'listDatabases', description: 'List all available databases (tenants)', action: 'List databases' },
+					{ name: 'List Tenants', value: 'listDatabases', description: 'List all available tenants', action: 'List tenants' },
 					{ name: 'List Schemas', value: 'listSchemas', description: 'List all schemas in the selected tenant', action: 'List schemas' },
 					{ name: 'List Tables', value: 'listTables', description: 'List all tables and views in the selected schema', action: 'List tables' },
 					{ name: 'Describe Table', value: 'describeTable', description: 'List columns (name, type, nullable)', action: 'Describe a table' },
