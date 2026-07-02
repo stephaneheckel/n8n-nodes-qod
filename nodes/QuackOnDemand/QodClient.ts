@@ -300,7 +300,7 @@ export class QodClient {
 
 				const resp: any = await new Promise((resolve, reject) => {
 						client.Handshake(
-							{ payload, protocolVersion: 0 },
+							{ payload, protocol_version: 0 },
 							md,
 							(err, r) => (err ? reject(err) : resolve(r)),
 						);
