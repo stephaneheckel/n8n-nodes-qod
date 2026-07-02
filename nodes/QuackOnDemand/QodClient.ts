@@ -295,6 +295,10 @@ export class QodClient {
 				const basic = Buffer.from(`${cfg.user}:${cfg.password}`).toString('base64');
 				const md = new grpc.Metadata();
 				md.set('authorization', `Basic ${basic}`);
+				// Include QoD-specific headers so the handshake doesn't poison the session
+				md.set('tenant', cfg.tenant);
+				md.set('pool', cfg.pool);
+				if (cfg.superuser) md.set('superuser', 'true');
 				// GizmoSQL-style: Basic auth header + username:password in payload
 				const payload = Buffer.from(`${cfg.user}:${cfg.password}`);
 
