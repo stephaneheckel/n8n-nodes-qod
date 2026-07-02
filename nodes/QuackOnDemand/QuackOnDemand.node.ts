@@ -85,6 +85,29 @@ function parseValuesJson(raw: unknown): Record<string, unknown> {
 	return {};
 }
 
+// Reject filter values that contain DML/DDL keywords or multiple statements.
+function validateFilter(filter: string, node: unknown, itemIndex: number): string {
+	const trimmed = filter.trim();
+	if (!trimmed) return trimmed;
+
+	// Multi-statement injection
+	if (trimmed.includes(';')) {
+		throw new NodeOperationError(node as any,
+			'Filter must not contain multiple statements (semicolon detected). ' +
+			'Use a single WHERE expression.', { itemIndex });
+	}
+
+	// DML / DDL injection
+	const danger = /\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|EXEC|EXECUTE|GRANT|REVOKE|MERGE|REPLACE)\b/i;
+	if (danger.test(trimmed)) {
+		throw new NodeOperationError(node as any,
+			'Filter must be a WHERE expression, not a DML or DDL statement. ' +
+			`Blocked keyword: ${danger.exec(trimmed)![0]}`, { itemIndex });
+	}
+
+	return trimmed;
+}
+
 // ── Resource handlers (free functions — execute() has 'this: IExecuteFunctions') ──
 
 // Batch insert: collect values from all items, send a single multi-row INSERT.
@@ -162,7 +185,7 @@ async function handleTable(
 
 	if (operation === 'read') {
 		const columns = exec.getNodeParameter('columns', itemIndex, []) as string[];
-		const filter = exec.getNodeParameter('filter', itemIndex, '') as string;
+		const filter = validateFilter(exec.getNodeParameter('filter', itemIndex, '') as string, exec.getNode(), itemIndex);
 		const limit = exec.getNodeParameter('limit', itemIndex, 100) as number;
 
 		const cols = columns && columns.length > 0 ? columns.join(', ') : '*';
@@ -215,7 +238,7 @@ async function handleTable(
 		}
 
 		const selectedColumns = exec.getNodeParameter('columns', itemIndex, []) as string[];
-		const filter = exec.getNodeParameter('filter', itemIndex, '') as string;
+		const filter = validateFilter(exec.getNodeParameter('filter', itemIndex, '') as string, exec.getNode(), itemIndex);
 		if (!filter || !filter.trim()) {
 			throw new NodeOperationError(exec.getNode(), 'A WHERE clause is required for UPDATE.', { itemIndex });
 		}
@@ -237,7 +260,7 @@ async function handleTable(
 	}
 
 	if (operation === 'delete') {
-		const filter = exec.getNodeParameter('filter', itemIndex, '') as string;
+		const filter = validateFilter(exec.getNodeParameter('filter', itemIndex, '') as string, exec.getNode(), itemIndex);
 		if (!filter || !filter.trim()) {
 			throw new NodeOperationError(exec.getNode(), 'A WHERE clause is required for DELETE.', { itemIndex });
 		}
