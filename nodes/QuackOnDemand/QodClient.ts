@@ -225,10 +225,6 @@ export class QodClient {
 	private readonly getTablesType: protobuf.Type;
 	private readonly commandIngestType: protobuf.Type;
 
-	// Bearer token from Flight handshake (GizmoSQL-style auth).
-	// Undefined = use HTTP Basic (QoD, sqlflite).
-	private readonly bearerToken?: string;
-
 	private constructor(
 		private readonly client: FlightClient,
 		private readonly cfg: QodConfig,
@@ -241,9 +237,7 @@ export class QodClient {
 			getDbSchemas: protobuf.Type;
 			getTables: protobuf.Type;
 		},
-		bearerToken?: string,
 	) {
-		this.bearerToken = bearerToken;
 		this.commandQueryType = cmdTypes.commandQuery;
 		this.commandUpdateType = cmdTypes.commandUpdate;
 		this.commandIngestType = cmdTypes.commandIngest;
@@ -288,49 +282,7 @@ export class QodClient {
 			getTables: root.lookupType('arrow.flight.protocol.sql.CommandGetTables'),
 		};
 
-		// Try Flight handshake for Bearer token auth (GizmoSQL).
-		// Fall back to HTTP Basic silently if the server doesn't implement Handshake.
-		let bearerToken: string | undefined;
-		if (cfg.user || cfg.password) {
-			try {
-				const basic = Buffer.from(`${cfg.user}:${cfg.password}`).toString('base64');
-				const md = new grpc.Metadata();
-				md.set('authorization', `Basic ${basic}`);
-				// Include QoD-specific headers so the handshake doesn't poison the session
-				md.set('tenant', cfg.tenant);
-				md.set('pool', cfg.pool);
-				if (cfg.superuser) md.set('superuser', 'true');
-				// GizmoSQL-style: Basic auth header + username:password in payload
-				const payload = Buffer.from(`${cfg.user}:${cfg.password}`);
-
-				const ts = cfg.timeoutMs ?? 30_000;
-					const resp: any = await new Promise((resolve, reject) => {
-						const timer = setTimeout(() => reject(new Error(
-							`Handshake timed out after ${ts}ms`)), ts);
-						client.Handshake(
-							{ payload, protocol_version: 0 },
-							md,
-							(err, r) => { clearTimeout(timer); err ? reject(err) : resolve(r); },
-						);
-					});
-					// The response payload may be the raw token, or a wrapped HandshakeResponse
-					const raw = (resp as any).payload;
-					if (!raw || raw.length === 0) {
-						throw new Error('Empty handshake response');
-					}
-					bearerToken = raw.toString('utf8');
-					} catch (e: any) {
-					// Only fall back to Basic for UNIMPLEMENTED (code 12).
-					// For other errors, re-throw so we can see them.
-					if (e.code === 12) {
-						// Handshake not supported — use HTTP Basic below.
-					} else {
-						throw e;
-					}
-					}
-		}
-
-		return new QodClient(client, cfg, anyType, cmdTypes, bearerToken);
+		return new QodClient(client, cfg, anyType, cmdTypes);
 	}
 
 	private static async credentials(cfg: QodConfig): Promise<grpc.ChannelCredentials> {
@@ -349,9 +301,7 @@ export class QodClient {
 		const md = new grpc.Metadata();
 		md.set('tenant', this.cfg.tenant);
 		md.set('pool', this.cfg.pool);
-		if (this.bearerToken) {
-			md.set('authorization', `Bearer ${this.bearerToken}`);
-		} else if (this.cfg.user || this.cfg.password) {
+		if (this.cfg.user || this.cfg.password) {
 			const basic = Buffer.from(`${this.cfg.user}:${this.cfg.password}`).toString('base64');
 			md.set('authorization', `Basic ${basic}`);
 		}
